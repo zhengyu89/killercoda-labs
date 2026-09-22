@@ -1,0 +1,44 @@
+{
+  "title": "cert-manager CA & TLS Trust: Chiikawa's Bakery HTTPS Lab",
+  "description": "Chiikawa's bakery goes HTTPS: a CA you generate yourself with openssl, a ClusterIssuer backed by it, an NGINX Gateway listener terminating TLS with the Secret cert-manager wrote -- and the same request failing and then succeeding with nothing changed on the server except what the client was willing to believe",
+  "details": {
+    "intro": {
+      "text": "intro.md",
+      "background": "init/background.sh",
+      "foreground": "init/foreground.sh"
+    },
+    "steps": [
+      {
+        "title": "A CA you made yourself",
+        "text": "step1/text.md",
+        "verify": "step1/verify.sh"
+      },
+      {
+        "title": "Ask it for a certificate",
+        "text": "step2/text.md",
+        "verify": "step2/verify.sh"
+      },
+      {
+        "title": "Put it on a listener",
+        "text": "step3/text.md",
+        "verify": "step3/verify.sh"
+      },
+      {
+        "title": "The same request, twice",
+        "text": "step4/text.md",
+        "verify": "step4/verify.sh"
+      },
+      {
+        "title": "Trust that travels",
+        "text": "step5/text.md",
+        "verify": "step5/verify.sh"
+      }
+    ],
+    "finish": {
+      "text": "finish.md"
+    }
+  },
+  "backend": {
+    "imageid": "kubernetes-kubeadm-1node"
+  }
+}
