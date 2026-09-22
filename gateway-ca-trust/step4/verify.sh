@@ -22,9 +22,10 @@ gw_ip() {
 }
 
 HOST=hachiware.chiikawa.lab
+GWIP=""
 
 for _ in $(seq 1 24); do
-  GWIP=$(gw_ip)
+  [ -n "$GWIP" ] || GWIP=$(gw_ip)
   [ -n "$GWIP" ] || { R="nogateway"; sleep 5; continue; }
 
   BUNDLE=$(kubectl -n usagi get configmap chiikawa-ca-bundle \
@@ -56,16 +57,20 @@ for _ in $(seq 1 24); do
   [ "${READY:-0}" -ge 1 ] 2>/dev/null || { R="noclient"; sleep 5; continue; }
 
   # Trust proven from inside the cluster, by the Pod, against the file it
-  # mounted -- not by the node and not by the learner's own helper.
-  BODY=$(kubectl -n usagi exec deploy/usagi -- curl -sS --cacert /etc/trust/ca.crt \
-    --resolve "$HOST:443:$GWIP" "https://$HOST/hostname" 2>/dev/null)
-  WITHRC=$?
+  # mounted -- not by the node and not by the learner's own helper. One
+  # kubectl exec proves both the positive and the negative case; exec's own
+  # setup cost is what was slow here, not the extra curl this now always runs.
+  IFS=$'\t' read -r WITHRC BARERC BODY <<<"$(kubectl -n usagi exec deploy/usagi -- sh -c '
+    H=$1; G=$2
+    B=$(curl -sS --cacert /etc/trust/ca.crt --resolve "$H:443:$G" "https://$H/hostname" 2>/dev/null)
+    W=$?
+    curl -sS --resolve "$H:443:$G" "https://$H/hostname" >/dev/null 2>&1
+    BR=$?
+    printf "%s\t%s\t%s" "$W" "$BR" "$B"
+  ' sh "$HOST" "$GWIP" 2>/dev/null)"
+
   [ "$WITHRC" == "0" ] || { R="stillfails"; sleep 5; continue; }
   echo "$BODY" | grep -q "hachiware" || { R="wrongbackend"; sleep 5; continue; }
-
-  kubectl -n usagi exec deploy/usagi -- curl -sS \
-    --resolve "$HOST:443:$GWIP" "https://$HOST/hostname" >/dev/null 2>&1
-  BARERC=$?
   [ "$BARERC" != "0" ] || { R="alreadytrusted"; sleep 5; continue; }
 
   pass

@@ -21,31 +21,25 @@ gw_ip() {
   echo "$ip"
 }
 
+GWIP=""
+
 for _ in $(seq 1 24); do
-  SECNAME=$(kubectl -n chiikawa get certificate hachiware-cert \
-    -o jsonpath='{.spec.secretName}' 2>/dev/null)
+  # One round trip for every field read off the Certificate, instead of one
+  # kubectl call per field.
+  IFS=$'\t' read -r SECNAME REF KIND CREADY DNS <<<"$(kubectl -n chiikawa get certificate hachiware-cert \
+    -o jsonpath='{.spec.secretName}{"\t"}{.spec.issuerRef.name}{"\t"}{.spec.issuerRef.kind}{"\t"}{.status.conditions[?(@.type=="Ready")].status}{"\t"}{.spec.dnsNames}' 2>/dev/null)"
+
   [ -n "$SECNAME" ] || { R="nocert"; sleep 5; continue; }
   [ "$SECNAME" == "hachiware-tls" ] || { R="wrongsecret"; sleep 5; continue; }
-
-  REF=$(kubectl -n chiikawa get certificate hachiware-cert \
-    -o jsonpath='{.spec.issuerRef.name}' 2>/dev/null)
-  KIND=$(kubectl -n chiikawa get certificate hachiware-cert \
-    -o jsonpath='{.spec.issuerRef.kind}' 2>/dev/null)
   [ "$REF" == "chiikawa-ca-issuer" ] || { R="wrongissuer"; sleep 5; continue; }
   [ "$KIND" == "ClusterIssuer" ] || { R="wrongkind"; sleep 5; continue; }
-
-  DNS=$(kubectl -n chiikawa get certificate hachiware-cert \
-    -o jsonpath='{.spec.dnsNames}' 2>/dev/null)
   echo "$DNS" | grep -q "hachiware.chiikawa.lab" || { R="dnsnames"; sleep 5; continue; }
-
-  CREADY=$(kubectl -n chiikawa get certificate hachiware-cert \
-    -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)
-  CRMSG=$(kubectl -n chiikawa get certificaterequest \
-    -o jsonpath='{.items[-1:].status.conditions[?(@.type=="Ready")].message}' 2>/dev/null)
   [ "$CREADY" == "True" ] || { R="certnotready"; sleep 5; continue; }
 
-  LEAF=$(kubectl -n chiikawa get secret hachiware-tls \
-    -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d 2>/dev/null)
+  # Same trick for the two keys this step needs out of the one Secret.
+  IFS=$'\t' read -r TLSCRT_B64 CACRT_B64 <<<"$(kubectl -n chiikawa get secret hachiware-tls \
+    -o jsonpath='{.data.tls\.crt}{"\t"}{.data.ca\.crt}' 2>/dev/null)"
+  LEAF=$(printf '%s' "$TLSCRT_B64" | base64 -d 2>/dev/null)
   echo "$LEAF" | grep -q "BEGIN CERTIFICATE" || { R="nosecret"; sleep 5; continue; }
 
   # Derive the signer from the certificate itself rather than trusting
@@ -57,13 +51,12 @@ for _ in $(seq 1 24); do
   SAN=$(echo "$LEAF" | openssl x509 -noout -ext subjectAltName 2>/dev/null)
   echo "$SAN" | grep -q "DNS:hachiware.chiikawa.lab" || { R="nosan"; sleep 5; continue; }
 
-  kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data.ca\.crt}' 2>/dev/null \
-    | grep -q . || { R="nocacrt"; sleep 5; continue; }
+  [ -n "$CACRT_B64" ] || { R="nocacrt"; sleep 5; continue; }
 
   # The Certificate being Ready is not the same claim as the Gateway serving
   # it -- the pre-built listener only starts working once it can resolve the
   # Secret this step wrote. Check what actually comes back on the wire.
-  GWIP=$(gw_ip)
+  [ -n "$GWIP" ] || GWIP=$(gw_ip)
   [ -n "$GWIP" ] || { R="nodataplane"; sleep 5; continue; }
 
   SERVED=$(echo | timeout 5 openssl s_client -connect "$GWIP:443" \
@@ -105,7 +98,10 @@ case "$R" in
     "That is the name the Gateway listener will serve and the name the client" \
     "will ask for in step 3. A certificate for any other name fails there, and" \
     "the failure looks nothing like this one." ;;
-  certnotready) fail \
+  certnotready)
+    CRMSG=$(kubectl -n chiikawa get certificaterequest \
+      -o jsonpath='{.items[-1:].status.conditions[?(@.type=="Ready")].message}' 2>/dev/null)
+    fail \
     "'hachiware-cert' is not Ready (Ready=${CREADY:-<none>})." \
     "" \
     "The Certificate is a standing wish; each attempt to grant it is a" \

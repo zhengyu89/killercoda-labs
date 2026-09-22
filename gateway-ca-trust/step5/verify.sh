@@ -26,24 +26,18 @@ CA_FP=$(kubectl -n cert-manager get secret chiikawa-ca-key-pair \
   -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d 2>/dev/null \
   | openssl x509 -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)
 
+GWIP=""
+
 for _ in $(seq 1 30); do
-  SRC=$(kubectl get bundle chiikawa-ca-bundle \
-    -o jsonpath='{.spec.sources[0].secret.name}{" "}{.spec.sources[0].secret.key}' 2>/dev/null)
+  # One round trip for every field read off the Bundle, instead of one
+  # kubectl call per field.
+  IFS=$'\t' read -r SRC TARGETKEY SELECTOR SYNCED <<<"$(kubectl get bundle chiikawa-ca-bundle \
+    -o jsonpath='{.spec.sources[0].secret.name}{" "}{.spec.sources[0].secret.key}{"\t"}{.spec.target.configMap.key}{"\t"}{.spec.target.namespaceSelector.matchLabels.chiikawa\.lab/trust-bundle}{"\t"}{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null)"
+
   [ -n "$SRC" ] || { R="nobundle"; sleep 5; continue; }
   [ "$SRC" == "chiikawa-ca-key-pair tls.crt" ] || { R="wrongsource"; sleep 5; continue; }
-
-  TARGETKEY=$(kubectl get bundle chiikawa-ca-bundle \
-    -o jsonpath='{.spec.target.configMap.key}' 2>/dev/null)
   [ "$TARGETKEY" == "ca.crt" ] || { R="wrongtargetkey"; sleep 5; continue; }
-
-  SELECTOR=$(kubectl get bundle chiikawa-ca-bundle \
-    -o jsonpath='{.spec.target.namespaceSelector.matchLabels.chiikawa\.lab/trust-bundle}' 2>/dev/null)
   [ "$SELECTOR" == "true" ] || { R="noselector"; sleep 5; continue; }
-
-  SYNCED=$(kubectl get bundle chiikawa-ca-bundle \
-    -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null)
-  SYNCMSG=$(kubectl get bundle chiikawa-ca-bundle \
-    -o jsonpath='{.status.conditions[?(@.type=="Synced")].message}' 2>/dev/null)
   [ "$SYNCED" == "True" ] || { R="notsynced"; sleep 5; continue; }
 
   # A Bundle with no namespaceSelector targets every namespace. Checking a
@@ -55,9 +49,11 @@ for _ in $(seq 1 30); do
 
   ALLGOOD=1
   unset UNLABELED MISSINGNS WRONGNS
+  # Both namespaces' labels in one call instead of one kubectl call each.
+  NSLABELS=$(kubectl get namespace usagi kitchen \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"="}{.metadata.labels.chiikawa\.lab/trust-bundle}{"\n"}{end}' 2>/dev/null)
   for NS in usagi kitchen; do
-    LBL=$(kubectl get namespace "$NS" \
-      -o jsonpath='{.metadata.labels.chiikawa\.lab/trust-bundle}' 2>/dev/null)
+    LBL=$(echo "$NSLABELS" | grep "^${NS}=" | cut -d= -f2)
     [ "$LBL" == "true" ] || { ALLGOOD=0; UNLABELED="$NS"; break; }
 
     CMDATA=$(kubectl -n "$NS" get configmap chiikawa-ca-bundle \
@@ -75,7 +71,7 @@ for _ in $(seq 1 30); do
 
   # Proven live, from Usagi's own Pod, against the file trust-manager wrote --
   # not against the copy the learner deleted at the start of this step.
-  GWIP=$(gw_ip)
+  [ -n "$GWIP" ] || GWIP=$(gw_ip)
   [ -n "$GWIP" ] || { R="nogateway"; sleep 5; continue; }
 
   READY=$(kubectl -n usagi get deploy usagi -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
@@ -115,7 +111,10 @@ case "$R" in
     "With no namespaceSelector at all, a Bundle targets *every* namespace --" \
     "that is not 'select nothing', it is 'select everything':" \
     "  kubectl get bundle chiikawa-ca-bundle -o jsonpath='{.spec.target.namespaceSelector}'" ;;
-  notsynced) fail \
+  notsynced)
+    SYNCMSG=$(kubectl get bundle chiikawa-ca-bundle \
+      -o jsonpath='{.status.conditions[?(@.type=="Synced")].message}' 2>/dev/null)
+    fail \
     "Bundle 'chiikawa-ca-bundle' is not Synced (Synced=${SYNCED:-<none>})." \
     "" \
     "What it says:" \
