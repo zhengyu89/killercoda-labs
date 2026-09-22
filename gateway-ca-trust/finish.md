@@ -8,7 +8,7 @@
 - **CA (Certificate Authority)** — a certificate and private key where the certificate has `CA:TRUE`. That bit is the only thing that lets it sign other certificates and be trusted by anything downstream. You made yours with two `openssl` commands in step 1.
 - **Issuer / ClusterIssuer** — cert-manager's pointer at a signer. `Issuer` is namespaced; `ClusterIssuer` is cluster-scoped and reads its Secrets from one fixed namespace (`--cluster-resource-namespace`, default wherever cert-manager runs). Neither *is* a CA — both just say where to find one and what type it is (`ca`, `acme`, `vault`, ...).
 - **Certificate** — a standing request: "keep a valid, signed keypair for this name in this Secret." cert-manager watches it, issues via a `CertificateRequest`, and renews it automatically before it expires. You never handle the private key directly; cert-manager writes it straight into the Secret.
-- **trust-manager / `Bundle`** — the distribution half of the same problem. cert-manager gets you *a* signed certificate; `Bundle` gets *the CA that signs it* into every namespace that needs to verify one, kept in sync as a control loop instead of a one-time copy.
+- **trust-manager / `Bundle`** — the distribution half of the same problem. cert-manager gets you *a* signed certificate; `Bundle` gets *the CA that signs it* into every namespace that needs to verify one, and keeps it up to date on its own instead of being a one-time copy.
 - **Why you need all four together**: an issuer without a CA has nothing to sign with; a Certificate without an issuer has no way to be granted; and a valid Certificate on a working listener still fails at the client until something distributes the CA that vouches for it. Step 3 is the proof — nothing on the server was ever broken.
 
 ## 🔍 The details behind that recap
@@ -25,14 +25,14 @@
 
 **A trust store built from leaf certificates works, right up until it doesn't.** Handing a client `tls.crt` makes the handshake succeed — OpenSSL anchors on the exact certificate presented — so the mistake is invisible on the day it is made. It grants trust to one certificate with a 90-day life instead of to the authority behind it, and comes back as an outage at the first renewal. `ca.crt` is the file that gets distributed, and `CA:TRUE` is how you tell them apart, in a bundle exactly as much as on a laptop.
 
-**A bundle carries certificates and only certificates.** It is copied into every namespace and mounted by every workload, so the one file that must never travel with it is the key. The ConfigMap you made by hand in step 4 was a copy, not a control loop: rotate the root and it still holds the old one, in that namespace, alongside every other copy anyone made. `trust-manager`'s `Bundle` is the fix — a source, a target, and a `namespaceSelector`, kept in sync on its own. `kitchen` never got a manual copy from you at all; it got one because it carried the right label.
+**A bundle carries certificates and only certificates.** It is copied into every namespace and mounted by every workload, so the one file that must never travel with it is the key. The ConfigMap you made by hand in step 4 was a one-time copy: rotate the root and it still holds the old one, in that namespace, alongside every other copy anyone made. `trust-manager`'s `Bundle` is the fix — a source, a target, and a `namespaceSelector`, kept up to date on its own. `kitchen` never got a manual copy from you at all; it got one because it carried the right label.
 
 ## 📚 Documentation used in this lab
 
-- [cert-manager: CA issuers](https://cert-manager.io/docs/configuration/ca/) — the `openssl` commands, the Secret, the `Issuer`/`ClusterIssuer`, and the warnings about running a PKI
+- [cert-manager: CA issuers](https://cert-manager.io/docs/configuration/ca/) — the `openssl` commands, the Secret, the `Issuer`/`ClusterIssuer`, and the warnings about running your own CA
 - [cert-manager: cluster resource namespace](https://cert-manager.io/docs/configuration/#cluster-resource-namespace) — where a `ClusterIssuer` looks for Secrets
 - [cert-manager: Certificate resources](https://cert-manager.io/docs/usage/certificate/) — fields, defaults, renewal
-- [cert-manager: trust-manager](https://cert-manager.io/docs/trust/trust-manager/) · [Bundle API reference](https://cert-manager.io/docs/trust/trust-manager/bundle/) — distributing a CA as a control loop
+- [cert-manager: trust-manager](https://cert-manager.io/docs/trust/trust-manager/) · [Bundle API reference](https://cert-manager.io/docs/trust/trust-manager/bundle/) — distributing a CA and keeping it up to date on its own
 - [Gateway API: TLS configuration](https://gateway-api.sigs.k8s.io/guides/user-guides/tls/) — `Terminate` vs `Passthrough`, `certificateRefs`, cross-namespace refs
 - [Gateway API: `Gateway`](https://gateway-api.sigs.k8s.io/reference/api-types/gateway/) · [`HTTPRoute`](https://gateway-api.sigs.k8s.io/reference/api-types/httproute/) · [`GatewayClass`](https://gateway-api.sigs.k8s.io/reference/api-types/gatewayclass/)
 - [NGINX Gateway Fabric: securing traffic](https://docs.nginx.com/nginx-gateway-fabric/traffic-security/)

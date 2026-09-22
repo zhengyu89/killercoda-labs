@@ -62,15 +62,18 @@ done
 
 case "$R" in
   nogateway) fail \
-    "There is no Gateway data plane to talk to -- finish step 3 first." \
+    "There is no Gateway data plane to talk to yet." \
     "" \
-    "  kubectl -n chiikawa get gateway,svc" ;;
+    "  kubectl -n chiikawa get gateway,svc" \
+    "" \
+    "This Service is created by the lab's own setup, not by you -- if it's" \
+    "missing, setup may still be finishing (see step 1)." ;;
   nofile) fail \
     "/root/answers/ca.crt does not exist, or is empty." \
     "" \
-    "Write the certificate that makes the client trust this listener into that" \
-    "path, then:" \
-    "  visit /root/answers/ca.crt" ;;
+    "Get ca.crt out of the hachiware-tls Secret, base64-decode it, and save it" \
+    "to that path:" \
+    "  kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data.ca\\.crt}' | base64 -d > /root/answers/ca.crt" ;;
   notacert) fail \
     "/root/answers/ca.crt is not a PEM certificate openssl can read." \
     "" \
@@ -84,7 +87,7 @@ case "$R" in
     "  subject: ${SUBJ}" \
     "  basicConstraints: ${BC:-<none>}" \
     "" \
-    "This is almost certainly the leaf, tls.crt -- and 'visit' with it WORKS," \
+    "This is almost certainly the leaf, tls.crt -- and curl WITH IT SUCCEEDS," \
     "which is exactly why it is worth failing you for. OpenSSL will anchor on" \
     "the exact certificate presented, so the request succeeds and the mistake is" \
     "invisible until the first renewal replaces that leaf and every client you" \
@@ -109,12 +112,13 @@ case "$R" in
   stillfails) fail \
     "The request verified against /root/answers/ca.crt still fails (curl exit ${WITHRC})." \
     "" \
-    "  visit /root/answers/ca.crt" \
+    "  GWIP=\$(kubectl -n chiikawa get svc chiikawa-gateway-nginx -o jsonpath='{.spec.clusterIP}')" \
+    "  curl -sS --cacert /root/answers/ca.crt --resolve hachiware.chiikawa.lab:443:\$GWIP https://hachiware.chiikawa.lab/hostname" \
     "" \
     "Exit 60 with a correct CA file usually means the listener is serving a leaf" \
     "this CA did not sign. Exit 51 means the name does not match its SANs. Both" \
     "are visible in the handshake:" \
-    "  servedcert" ;;
+    "  echo | openssl s_client -connect \$GWIP:443 -servername hachiware.chiikawa.lab | openssl x509 -noout -issuer -subject" ;;
   wrongbackend) fail \
     "The request succeeded but the response did not come from hachiware." \
     "" \
@@ -129,7 +133,8 @@ case "$R" in
     "Something has already been added to this machine's system trust store, or" \
     "the client is not verifying at all. This step is the difference between the" \
     "two requests, so it needs the plain one to fail:" \
-    "  visit" \
+    "  GWIP=\$(kubectl -n chiikawa get svc chiikawa-gateway-nginx -o jsonpath='{.spec.clusterIP}')" \
+    "  curl -sS --resolve hachiware.chiikawa.lab:443:\$GWIP https://hachiware.chiikawa.lab/hostname" \
     "  ls /usr/local/share/ca-certificates/" ;;
   *) fail "Unexpected state -- rerun the check." ;;
 esac

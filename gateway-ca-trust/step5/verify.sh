@@ -152,7 +152,7 @@ case "$R" in
   stillfails) fail \
     "From inside the Pod, the request against /etc/trust/ca.crt still fails (curl exit ${WITHRC})." \
     "" \
-    "  insidecurl /etc/trust/ca.crt" \
+    "  kubectl -n usagi exec deploy/usagi -- curl -sS --cacert /etc/trust/ca.crt --resolve hachiware.chiikawa.lab:443:${GWIP} https://hachiware.chiikawa.lab/hostname" \
     "" \
     "Give the volume a moment to catch up with the new ConfigMap -- kubelet" \
     "syncs mounted ConfigMaps on its own schedule, not instantly:" \

@@ -17,7 +17,7 @@ No public CA. No ACME. No shortcuts. 🚫
 
 ## 🎯 Objective
 
-By the end of this lab, you will have built a working, self-signed PKI in front of a real Kubernetes workload: a root CA you generate yourself, a `ClusterIssuer` and `Certificate` that turn it into a live HTTPS listener, a hands-on look at *why* a valid certificate still isn't enough for a client to trust it, and a `trust-manager` `Bundle` that distributes that trust to every namespace that needs it — automatically, instead of by hand.
+By the end of this lab you will have made your own root certificate, used it to sign a real HTTPS certificate for a Kubernetes `Gateway`, seen why a valid certificate is still not enough for a client to trust it, and set up `trust-manager` so the certificate is copied to every namespace that needs it — automatically, instead of by hand.
 
 ## 🗺️ Your Mission
 
@@ -40,20 +40,13 @@ Take the bakery from plaintext to a real TLS handshake, and then take that trust
 - **trust-manager** v0.25.0 — installed, with **no `Bundle` yet**
 - `hachiware`, a plain HTTP Service in namespace `chiikawa`; namespaces `usagi` and `kitchen`, both empty and waiting
 
-Four helpers are on your `PATH`, and each step says when to reach for them:
-
-| Helper | What it does |
-|---|---|
-| `servedcert` | the certificate the Gateway listener *actually serves* — handshake only, no request |
-| `visit` | one HTTPS request from this node; with a file argument, trusting that file |
-| `insidecurl` | the same request, made from **inside** the cluster by Usagi's Pod |
-| `why` | after a failed CHECK, prints exactly which condition it wasn't happy with |
+There are no wrapper scripts for `curl` or `kubectl get` in this lab — every command you run is the real thing, typed out in full, so what you practice here is what you'd actually type when debugging this on a real cluster. The one helper on your `PATH` is `why`, which prints the reason the last CHECK failed.
 
 `kubectl` is also aliased to **`k`**, with the same completions, if you'd rather type less.
 
 ## 📏 House Rules
 
-Every command you need is given directly in the step — this lab is a walkthrough, not a guessing game. Where a step asks you to work something out yourself, it says so, and a **Tip** is there if you get stuck.
+Each step tells you exactly what to build (name, namespace, fields) and how to check it yourself. Try writing the command or YAML from that description first — a **Solution** is there if you get stuck, hidden so it doesn't spoil the attempt.
 
 Each step is graded with the **CHECK** button. When a check doesn't pass, run `why`{{exec}} in the terminal — every check in this lab writes down exactly which condition it wasn't happy with, rather than leaving you to guess. 🔍
 

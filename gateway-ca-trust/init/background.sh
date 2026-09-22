@@ -194,6 +194,10 @@ RC
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+# Only one helper: reading back why a check failed. Every other command in
+# this lab (kubectl, curl, openssl) is typed out in full in the step text, on
+# purpose -- wrapping them in scripts would hide the exact commands a learner
+# needs when debugging this for real.
 
 # Killercoda shows only pass/fail, never a verify script's output, so each
 # check writes its reason to /root/.check and `why` prints it.
@@ -206,88 +210,5 @@ else
 fi
 WRAP
 chmod +x /usr/local/bin/why
-
-# The address of the nginx data plane NGINX Gateway Fabric creates for a
-# Gateway. It is a Service in the Gateway's own namespace, not in
-# nginx-gateway, and it does not exist until the Gateway does.
-cat > /usr/local/bin/gwaddr <<'WRAP'
-#!/bin/bash
-GATEWAY=${1:-chiikawa-gateway}
-NS=${2:-chiikawa}
-IP=$(kubectl -n "$NS" get svc \
-  -l gateway.networking.k8s.io/gateway-name="$GATEWAY" \
-  -o jsonpath='{.items[0].spec.clusterIP}' 2>/dev/null)
-[ -z "$IP" ] && IP=$(kubectl -n "$NS" get svc "${GATEWAY}-nginx" \
-  -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
-echo "$IP"
-WRAP
-chmod +x /usr/local/bin/gwaddr
-
-# The certificate the listener actually serves for one SNI name. No request is
-# made -- this is the handshake and nothing else.
-cat > /usr/local/bin/servedcert <<'WRAP'
-#!/bin/bash
-SNI=${1:-hachiware.chiikawa.lab}
-GWIP=$(gwaddr)
-if [ -z "$GWIP" ]; then
-  echo "No nginx data plane Service yet -- has the Gateway been created?"
-  echo "  kubectl -n chiikawa get gateway,svc"
-  exit 1
-fi
-echo | timeout 5 openssl s_client -connect "$GWIP:443" -servername "$SNI" 2>/dev/null \
-  | openssl x509 -noout -issuer -subject -ext basicConstraints -ext subjectAltName
-WRAP
-chmod +x /usr/local/bin/servedcert
-
-# One HTTPS request to the bakery, from this node. With no argument the client
-# trusts only the system store; with a file, it also trusts that file.
-cat > /usr/local/bin/visit <<'WRAP'
-#!/bin/bash
-CA=$1
-HOST=hachiware.chiikawa.lab
-GWIP=$(gwaddr)
-if [ -z "$GWIP" ]; then
-  echo "No nginx data plane Service yet -- has the Gateway been created?"
-  echo "  kubectl -n chiikawa get gateway,svc"
-  exit 1
-fi
-if [ -n "$CA" ]; then
-  curl -sS --cacert "$CA" --resolve "$HOST:443:$GWIP" "https://$HOST/hostname"
-else
-  curl -sS --resolve "$HOST:443:$GWIP" "https://$HOST/hostname"
-fi
-RC=$?
-echo
-echo "curl exit code: $RC"
-WRAP
-chmod +x /usr/local/bin/visit
-
-# The same request, made from inside the cluster by the usagi Pod instead of
-# from this node. The argument is a path inside that container.
-cat > /usr/local/bin/insidecurl <<'WRAP'
-#!/bin/bash
-CA=$1
-HOST=hachiware.chiikawa.lab
-GWIP=$(gwaddr)
-if [ -z "$GWIP" ]; then
-  echo "No nginx data plane Service yet -- has the Gateway been created?"
-  exit 1
-fi
-if ! kubectl -n usagi get deploy usagi >/dev/null 2>&1; then
-  echo "There is no usagi Deployment yet:  kubectl apply -f /root/usagi.yaml"
-  exit 1
-fi
-if [ -n "$CA" ]; then
-  kubectl -n usagi exec deploy/usagi -- \
-    curl -sS --cacert "$CA" --resolve "$HOST:443:$GWIP" "https://$HOST/hostname"
-else
-  kubectl -n usagi exec deploy/usagi -- \
-    curl -sS --resolve "$HOST:443:$GWIP" "https://$HOST/hostname"
-fi
-RC=$?
-echo
-echo "curl exit code: $RC"
-WRAP
-chmod +x /usr/local/bin/insidecurl
 
 touch /tmp/.initfinished

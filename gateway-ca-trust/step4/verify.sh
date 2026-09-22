@@ -127,7 +127,7 @@ case "$R" in
   stillfails) fail \
     "From inside the Pod, the request against /etc/trust/ca.crt still fails (curl exit ${WITHRC})." \
     "" \
-    "  insidecurl /etc/trust/ca.crt" \
+    "  kubectl -n usagi exec deploy/usagi -- curl -sS --cacert /etc/trust/ca.crt --resolve hachiware.chiikawa.lab:443:${GWIP} https://hachiware.chiikawa.lab/hostname" \
     "" \
     "Check what actually landed in the container, and under what name:" \
     "  kubectl -n usagi exec deploy/usagi -- ls -l /etc/trust" ;;
@@ -141,6 +141,6 @@ case "$R" in
     "This step is the difference between the two requests. If the plain one" \
     "passes, the image's trust store already contains your CA, or the Pod is" \
     "reaching something other than the Gateway:" \
-    "  insidecurl" ;;
+    "  kubectl -n usagi exec deploy/usagi -- curl -sS --resolve hachiware.chiikawa.lab:443:${GWIP} https://hachiware.chiikawa.lab/hostname" ;;
   *) fail "Unexpected state -- rerun the check." ;;
 esac

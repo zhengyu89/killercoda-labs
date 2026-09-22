@@ -158,7 +158,8 @@ case "$R" in
     "The Certificate above may say Ready=True while the listener is still" \
     "catching up, or the Secret it wrote may not be the one the listener" \
     "names. Try it by hand:" \
-    "  servedcert" \
+    "  GWIP=\$(kubectl -n chiikawa get svc chiikawa-gateway-nginx -o jsonpath='{.spec.clusterIP}')" \
+    "  echo | openssl s_client -connect \$GWIP:443 -servername hachiware.chiikawa.lab | openssl x509 -noout -issuer" \
     "  kubectl -n chiikawa get gateway chiikawa-gateway -o jsonpath='{.status.listeners}'" ;;
   wrongsan) fail \
     "The Gateway is serving a certificate without a SAN for hachiware.chiikawa.lab." \
