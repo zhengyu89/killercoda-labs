@@ -6,7 +6,7 @@ This repository is a growing set of guided [Killercoda](https://killercoda.com/)
 
 ## Start here
 
-### [🍞 cert-manager CA & TLS Trust: Chiikawa's Bakery HTTPS Lab](cert-manager/gateway-ca-trust/)
+### [🍞 cert-manager CA & TLS Trust: Chiikawa's Bakery HTTPS Lab](gateway-ca-trust/)
 
 Chiikawa’s bakery has an HTTP site, an internal-only hostname, and no public CA that can validate it. You become the CA, then take the service all the way to trusted HTTPS.
 
@@ -40,13 +40,12 @@ The scenario uses cert-manager v1.20.3, Gateway API v1.6.1, and NGINX Gateway Fa
 ## Repository layout
 
 ```text
-cert-manager/
-└── gateway-ca-trust/
-    ├── index.json          # Killercoda scenario definition
-    ├── intro.md            # story, mission, and environment
-    ├── init/               # cluster bootstrap and learner helpers
-    ├── step1/ ... step5/   # learner instructions and outcome checks
-    └── finish.md           # recap and source material
+gateway-ca-trust/
+├── index.json              # Killercoda scenario definition
+├── intro.md                # story, mission, and environment
+├── init/                   # cluster bootstrap and learner helpers
+├── step1/ ... step5/       # learner instructions and outcome checks
+└── finish.md               # recap and source material
 ```
 
 Every scenario is self-contained: `index.json` is the entry point, `init/` prepares the environment, and each step pairs learner-facing Markdown with a verifier script.

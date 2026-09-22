@@ -39,7 +39,7 @@
 
 ## 🚀 Where to go next
 
-- [`ckne/gateway-tls`](../../ckne/gateway-tls/) — SNI serving two certificates on one port, a forced renewal the Gateway never hears about, and what `Passthrough` gives up
+- [`gateway-tls`](../gateway-tls/) — SNI serving two certificates on one port, a forced renewal the Gateway never hears about, and what `Passthrough` gives up
 - [`cert-manager/certificate-renewal`](../certificate-renewal/) — what a renewal actually changes, and which of your workloads will never notice *(planned)*
 
-> See [`cert-manager/README.md`](../README.md) for how this lab relates to the rest of the set. 🐭
+> See the [repository README](../README.md) for the rest of the lab set. 🐭
