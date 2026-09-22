@@ -15,7 +15,11 @@ No public CA. No ACME. No shortcuts. 🚫
 
 **So you're going to be the certificate authority.** 👑
 
-## 🎯 Your Mission
+## 🎯 Objective
+
+By the end of this lab, you will have built a working, self-signed PKI in front of a real Kubernetes workload: a root CA you generate yourself, a `ClusterIssuer` and `Certificate` that turn it into a live HTTPS listener, a hands-on look at *why* a valid certificate still isn't enough for a client to trust it, and a `trust-manager` `Bundle` that distributes that trust to every namespace that needs it — automatically, instead of by hand.
+
+## 🗺️ Your Mission
 
 Take the bakery from plaintext to a real TLS handshake, and then take that trust from your own laptop to the whole cluster:
 
