@@ -1,6 +1,8 @@
 
 ## 🔑 Create the Chiikawa Bakery CA
 
+⏱️ **Setup takes 3–7 minutes.** The terminal is installing Gateway API CRDs, NGINX Gateway Fabric, cert-manager, and trust-manager in the background — you'll see a line of dots followed by `done` before any command below will work. If a command fails with something like "the server doesn't have a resource type" or "connection refused," that install just isn't finished yet.
+
 📚 **Reference:**
 - [cert-manager: CA — Setting up CA Issuers](https://cert-manager.io/docs/configuration/ca/)
 - [cert-manager: Cluster Resource Namespace](https://cert-manager.io/docs/configuration/#cluster-resource-namespace)
