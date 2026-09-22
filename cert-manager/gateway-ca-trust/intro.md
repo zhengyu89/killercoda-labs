@@ -17,35 +17,39 @@ No public CA. No ACME. No shortcuts. 🚫
 
 ## 🎯 Your Mission
 
-Take the bakery from plaintext to a real TLS handshake, the whole chain, by hand:
+Take the bakery from plaintext to a real TLS handshake, and then take that trust from your own laptop to the whole cluster:
 
 | | |
 |---|---|
 | 1️⃣ | 🔑 Forge the bakery's root CA with `openssl`, store it as a Secret, and wire it to a **`ClusterIssuer`** |
-| 2️⃣ | 📜 Ask it for a **`Certificate`** — and watch the Secret appear, signed by *your* CA |
-| 3️⃣ | 🚪 Put it on an **NGINX `Gateway`** listener and route `hachiware.chiikawa.lab` to the bakery |
-| 4️⃣ | 🔒 Make the exact same HTTPS request **fail**, then **succeed** — with nothing changed on the server |
-| 5️⃣ | 🤝 Hand the trust bundle to Usagi's Pod so the cluster believes you too |
+| 2️⃣ | 📜 Ask it for a **`Certificate`** — a waiting `Gateway` picks up the Secret the moment cert-manager writes it |
+| 3️⃣ | 🔒 Understand why the exact same HTTPS request **fails, then succeeds**, with nothing changed on the server |
+| 4️⃣ | 🤝 Hand Usagi's Pod the CA certificate **by hand**, one namespace at a time |
+| 5️⃣ | ⚙️ Replace that by hand copy with a **`trust-manager` `Bundle`** that keeps every labeled namespace in sync on its own |
 
 ## 🧰 What's Already Running
 
 - **Gateway API** v1.6.1 CRDs, standard channel — `GatewayClass`, `Gateway`, `HTTPRoute`
 - **NGINX Gateway Fabric** 2.7.2, owner of the `nginx` `GatewayClass` 🐙
-- **cert-manager** v1.20.3 — installed, and with **no issuers of any kind**
-- `hachiware`, a plain HTTP Service in namespace `chiikawa`; namespace `usagi`, empty and waiting
+- A `Gateway` named `chiikawa-gateway` and an `HTTPRoute` in namespace `chiikawa`, **already built for you** — the listener already names a TLS Secret, `hachiware-tls`, that does not exist yet. This lab is about the CA and the trust chain behind that Secret, not about Gateway API wiring.
+- **cert-manager** v1.20.3 — installed, with **no issuers of any kind**
+- **trust-manager** v0.25.0 — installed, with **no `Bundle` yet**
+- `hachiware`, a plain HTTP Service in namespace `chiikawa`; namespaces `usagi` and `kitchen`, both empty and waiting
 
 Four helpers are on your `PATH`, and each step says when to reach for them:
 
 | Helper | What it does |
 |---|---|
-| `gwaddr` | the address of the nginx data plane, once a Gateway exists |
-| `servedcert` | the certificate the listener *actually serves* — handshake only, no request |
+| `servedcert` | the certificate the Gateway listener *actually serves* — handshake only, no request |
 | `visit` | one HTTPS request from this node; with a file argument, trusting that file |
 | `insidecurl` | the same request, made from **inside** the cluster by Usagi's Pod |
+| `why` | after a failed CHECK, prints exactly which condition it wasn't happy with |
+
+`kubectl` is also aliased to **`k`**, with the same completions, if you'd rather type less.
 
 ## 📏 House Rules
 
-Every step here gives you a **task, not a solution** — work it out yourself first, open the **Tip** if you're stuck, and read the **Solution** only once you've tried. 💪
+Every command you need is given directly in the step — this lab is a walkthrough, not a guessing game. Where a step asks you to work something out yourself, it says so, and a **Tip** is there if you get stuck.
 
 Each step is graded with the **CHECK** button. When a check doesn't pass, run `why`{{exec}} in the terminal — every check in this lab writes down exactly which condition it wasn't happy with, rather than leaving you to guess. 🔍
 

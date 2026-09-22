@@ -1,6 +1,7 @@
 #!/bin/bash
 
 CM_VERSION=v1.20.3
+TM_VERSION=v0.25.0
 NGF_VERSION=2.7.2
 GWAPI_VERSION=v1.6.1
 
@@ -39,7 +40,19 @@ helm install cert-manager jetstack/cert-manager \
   --set crds.enabled=true \
   --wait --timeout 5m >/dev/null 2>&1
 
+# trust-manager distributes a CA's certificate to namespaces by label --
+# step 5's subject. It goes in beside cert-manager, with no Bundle yet, the
+# same way cert-manager goes in with no issuer yet.
+helm install trust-manager oci://quay.io/jetstack/charts/trust-manager \
+  --version "$TM_VERSION" \
+  --namespace cert-manager \
+  --set defaultPackage.enabled=false \
+  --wait --timeout 5m >/dev/null 2>&1
+
 if ! kubectl -n cert-manager get deploy cert-manager >/dev/null 2>&1; then
+  touch /tmp/.initbroken
+fi
+if ! kubectl -n cert-manager get deploy trust-manager >/dev/null 2>&1; then
   touch /tmp/.initbroken
 fi
 if ! kubectl get gatewayclass nginx >/dev/null 2>&1; then
@@ -48,6 +61,9 @@ fi
 
 kubectl create namespace chiikawa >/dev/null 2>&1
 kubectl create namespace usagi >/dev/null 2>&1
+# Step 5's extra target namespace: nobody touches this one by hand, so a CA
+# certificate landing in it only happens because the Bundle put it there.
+kubectl create namespace kitchen >/dev/null 2>&1
 
 # The site that is about to get a certificate. Plain HTTP, port 80, no TLS of
 # its own anywhere -- everything this lab does about TLS happens in front of it.
@@ -89,9 +105,51 @@ EOF
 
 kubectl -n chiikawa rollout status deployment/hachiware --timeout=180s >/dev/null 2>&1
 
-# Step 5's consumer. It mounts a ConfigMap that does not exist yet, on purpose:
+# The front door, built for the learner rather than by them -- this lab is
+# about the CA and the trust chain, not Gateway API mechanics. It already
+# names the Secret cert-manager has not written yet: the listener sits at
+# ResolvedRefs=False until step 2's Certificate produces "hachiware-tls",
+# and then starts serving it with nothing here touched again.
+cat <<'EOF' | kubectl apply -f - >/dev/null 2>&1
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: chiikawa-gateway
+  namespace: chiikawa
+spec:
+  gatewayClassName: nginx
+  listeners:
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: hachiware.chiikawa.lab
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - kind: Secret
+        name: hachiware-tls
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: hachiware-route
+  namespace: chiikawa
+spec:
+  parentRefs:
+  - name: chiikawa-gateway
+  hostnames:
+  - hachiware.chiikawa.lab
+  rules:
+  - backendRefs:
+    - name: hachiware
+      port: 80
+EOF
+
+kubectl -n chiikawa rollout status deploy/chiikawa-gateway-nginx --timeout=120s >/dev/null 2>&1 || true
+
+# Step 4's consumer. It mounts a ConfigMap that does not exist yet, on purpose:
 # the learner creates it from their own CA, and until they do this Pod cannot
-# start. Applied in step 5 rather than here.
+# start. Applied in step 4 rather than here.
 cat > /root/usagi.yaml <<'EOF'
 apiVersion: apps/v1
 kind: Deployment
@@ -123,6 +181,15 @@ spec:
 EOF
 
 mkdir -p /root/answers /root/ca
+
+# `k` for `kubectl`, with completion, in every interactive shell from here on.
+cat >> /root/.bashrc <<'RC'
+if command -v kubectl >/dev/null 2>&1; then
+  source <(kubectl completion bash)
+  alias k=kubectl
+  complete -o default -F __start_kubectl k
+fi
+RC
 
 # ---------------------------------------------------------------------------
 # Helpers

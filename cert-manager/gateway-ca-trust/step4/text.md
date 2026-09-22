@@ -1,84 +1,73 @@
 
-🔒 **Everything is correct. And it fails anyway.**
+## 🐰 Usagi Receives the CA By Hand
 
-The certificate is valid, the listener serves it, the route is attached, the backend is up. Make a request:
+📚 **Reference:**
+- [Kubernetes: ConfigMaps](https://kubernetes.io/docs/concepts/configuration/configmap/)
+- [Kubernetes: mounting a ConfigMap as a volume](https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/#populate-a-volume-with-data-stored-in-a-configmap)
 
-```plain
-visit
-```{{exec}}
+You trust the bakery. Nothing else in the cluster does — not even a Pod one namespace away. Your `visit /root/answers/ca.crt` from step 3 is not a distribution strategy — every client that talks to `hachiware.chiikawa.lab` needs the same certificate, and clients are Pods with their own filesystems and their own trust stores.
 
-That fails, and **nothing is wrong with it**. The server is serving exactly what you built:
-
-```plain
-servedcert
-```{{exec}}
-
-Work out which side is refusing and why, then **write the certificate that fixes it to `/root/answers/ca.crt`** and prove it:
+There's a client waiting in `/root/usagi.yaml`: a Pod in namespace `usagi` that mounts a ConfigMap called `chiikawa-ca-bundle` at `/etc/trust`. Read it first — it names the ConfigMap it needs before that ConfigMap exists:
 
 ```plain
-visit /root/answers/ca.crt
+cat /root/usagi.yaml
 ```{{exec}}
 
-A pass here is the response body coming back — `hachiware-...`, the backend Pod's own name, over HTTPS.
+### 🎯 Your Tasks
 
-Two different files on this machine will make that request succeed. **Only one of them is the answer**, and the check knows the difference.
+#### Task 1: Create the trust ConfigMap
+
+- **Name**: `chiikawa-ca-bundle`
+- **Namespace**: `usagi`
+- **Key**: `ca.crt` — that key name becomes the filename inside the container
+- **Data**: the CA certificate from step 3's `/root/answers/ca.crt`
+
+```plain
+kubectl -n usagi create configmap chiikawa-ca-bundle --from-file=ca.crt=/root/answers/ca.crt
+```{{exec}}
+
+#### Task 2: Apply the client and get it Running
+
+```plain
+kubectl apply -f /root/usagi.yaml
+```{{exec}}
+
+```plain
+kubectl -n usagi rollout status deploy/usagi --timeout=120s
+```{{exec}}
+
+#### Task 3: Prove the difference, from inside the cluster
+
+```plain
+insidecurl
+```{{exec}}
+
+```plain
+insidecurl /etc/trust/ca.crt
+```{{exec}}
+
+Exit 60, then the backend Pod's own name. Same Pod, same request, same listener — one mounted file apart.
+
+⚠️ The check reads what you put in that ConfigMap, and it will fail you for putting **too much** in it — read on before you build it a different way.
 
 > **If CHECK does not pass**, run `why`{{exec}} — it prints the exact condition that was not met, and usually the command that shows you why.
 
 <br>
 
-<details><summary>Tip</summary>
-
-`curl` exit code 60 is `SSL certificate problem: unable to get local issuer certificate`. It is not a server error and it has no HTTP status code, because the request was never sent — the client hung up during the handshake.
-
-Nothing has ever given this machine a reason to believe `chiikawa-root-ca`. You made that CA half an hour ago on this same box; the system trust store has never heard of it.
-
-You have the certificate in two places, and they are the same bytes:
+<details><summary>Tip: if the Pod never starts</summary>
 
 ```plain
-openssl x509 -in /root/ca/ca.crt -noout -fingerprint -sha256
+kubectl -n usagi describe pod -l app=usagi | tail -20
 ```{{exec}}
 
-```plain
-kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data.ca\.crt}' | base64 -d | openssl x509 -noout -fingerprint -sha256
-```{{exec}}
-
-And `tls.crt` from that same Secret will *also* make `curl` succeed. Compare the three before you choose:
-
-```plain
-kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -subject -enddate -ext basicConstraints
-```{{exec}}
+A volume from a ConfigMap that does not exist does not crash the Pod — it makes it wait, forever, in `ContainerCreating`, with the reason on the Pod's events and nowhere else.
 
 </details>
 
-<details><summary>Solution</summary>
+<details><summary>Why the private key must never go in this ConfigMap</summary>
 
-```plain
-kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > /root/answers/ca.crt
-```{{exec}}
+A trust bundle is public by construction: it is copied into every namespace, mounted by every workload, and readable by anyone who can read a ConfigMap. `tls.crt` and `ca.crt` are certificates and belong in one. `tls.key` is the CA's private key, and anything holding it can mint a certificate for any name in your organisation. The check rejects a bundle containing a private key for that reason, and `trust-manager` — step 5's subject — refuses it outright with *only CERTIFICATE blocks are permitted*.
 
-(`cp /root/ca/ca.crt /root/answers/ca.crt` is the same file — the CA you generated, and the CA cert-manager published next to the leaf, are one certificate.)
-
-```plain
-visit /root/answers/ca.crt
-```{{exec}}
-
-Nothing changed on the server between the two requests. Same nginx, same listener, same certificate on the wire, same connection. The only thing that moved was **what the client was willing to believe**, and it moved because you handed it one file.
-
-That is the whole of "HTTPS fails without the CA, and succeeds with it": a TLS failure of this kind is never repaired on the server, because the server was never the problem.
-
-**Why not `tls.crt`.** Handing the client the leaf also works — OpenSSL will anchor on the exact certificate presented, so `curl` returns 200 and the setup looks finished. It is a trap rather than an alternative:
-
-```plain
-kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -subject -enddate -ext basicConstraints
-```{{exec}}
-
-```plain
-openssl x509 -in /root/answers/ca.crt -noout -subject -enddate -ext basicConstraints
-```{{exec}}
-
-The leaf is `CA:FALSE` and expires in 90 days, and cert-manager will replace it at 60. A trust store built out of leaves has to be rebuilt on every renewal, of every service, separately — and it grants trust to exactly one certificate rather than to the authority that issues them. The CA is `CA:TRUE`, lives ten years, and covers every certificate it will ever sign, including ones that do not exist yet.
-
-That is what makes the next step possible at all.
+**And this ConfigMap is a copy, not a control loop.** You made it by hand from a file on a node. Nothing keeps it in step with the CA: rotate the root, and this ConfigMap still holds the old one, in this namespace, plus every other copy anyone made anywhere. A new namespace gets nothing until someone remembers it exists. That is the scaling problem step 5 solves.
 
 </details>

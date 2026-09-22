@@ -5,7 +5,7 @@
 # The loop records the condition it is still waiting on in R, and if it runs
 # out of attempts that is what the learner is told.
 LOG=/root/.check
-STEP="Step 3 · Put it on a listener"
+STEP="Step 3 · Understand client trust"
 : > "$LOG"
 fail() { { echo "x $STEP"; echo; printf '%s\n' "$@"; } | tee "$LOG"; exit 1; }
 pass() { echo "OK $STEP -- passed." | tee "$LOG"; exit 0; }
@@ -21,147 +21,115 @@ gw_ip() {
   echo "$ip"
 }
 
-for _ in $(seq 1 24); do
-  GWCLASS=$(kubectl -n chiikawa get gateway chiikawa-gateway \
-    -o jsonpath='{.spec.gatewayClassName}' 2>/dev/null)
-  [ -n "$GWCLASS" ] || { R="nogateway"; sleep 5; continue; }
-  [ "$GWCLASS" == "nginx" ] || { R="wrongclass"; sleep 5; continue; }
+GWIP=$(gw_ip)
+HOST=hachiware.chiikawa.lab
 
-  PROTO=$(kubectl -n chiikawa get gateway chiikawa-gateway \
-    -o jsonpath='{.spec.listeners[?(@.port==443)].protocol}' 2>/dev/null)
-  [ "$PROTO" == "HTTPS" ] || { R="nohttps"; sleep 5; continue; }
+for _ in $(seq 1 12); do
+  [ -n "$GWIP" ] || { R="nogateway"; sleep 5; GWIP=$(gw_ip); continue; }
 
-  TLSMODE=$(kubectl -n chiikawa get gateway chiikawa-gateway \
-    -o jsonpath='{.spec.listeners[?(@.port==443)].tls.mode}' 2>/dev/null)
-  [ -z "$TLSMODE" ] || [ "$TLSMODE" == "Terminate" ] || { R="wrongmode"; sleep 5; continue; }
+  [ -s /root/answers/ca.crt ] || { R="nofile"; sleep 5; continue; }
 
-  CERTREF=$(kubectl -n chiikawa get gateway chiikawa-gateway \
-    -o jsonpath='{.spec.listeners[?(@.port==443)].tls.certificateRefs[*].name}' 2>/dev/null)
-  echo "$CERTREF" | grep -q "hachiware-tls" || { R="nocertref"; sleep 5; continue; }
+  SUBJ=$(openssl x509 -in /root/answers/ca.crt -noout -subject 2>/dev/null)
+  [ -n "$SUBJ" ] || { R="notacert"; sleep 5; continue; }
 
-  LCONDS=$(kubectl -n chiikawa get gateway chiikawa-gateway \
-    -o jsonpath='{range .status.listeners[*]}{.name}{"="}{range .conditions[*]}{.type}:{.status}{" "}{end}{"\n"}{end}' 2>/dev/null)
-  RESOLVED=$(kubectl -n chiikawa get gateway chiikawa-gateway \
-    -o jsonpath='{.status.listeners[*].conditions[?(@.type=="ResolvedRefs")].status}' 2>/dev/null)
-  echo "$RESOLVED" | grep -q "True" || { R="unresolved"; sleep 5; continue; }
+  BC=$(openssl x509 -in /root/answers/ca.crt -noout -ext basicConstraints 2>/dev/null)
+  echo "$BC" | grep -q "CA:TRUE" || { R="notca"; sleep 5; continue; }
+  echo "$SUBJ" | grep -q "CN *= *chiikawa-root-ca" || { R="wrongca"; sleep 5; continue; }
 
-  RPARENT=$(kubectl -n chiikawa get httproute hachiware-route \
-    -o jsonpath='{.spec.parentRefs[*].name}' 2>/dev/null)
-  [ -n "$RPARENT" ] || { R="noroute"; sleep 5; continue; }
-  echo "$RPARENT" | grep -q "chiikawa-gateway" || { R="wrongparent"; sleep 5; continue; }
+  # Same certificate as the one the cluster is actually signing with, rather
+  # than merely something with the right name in it.
+  FP1=$(openssl x509 -in /root/answers/ca.crt -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)
+  FP2=$(kubectl -n cert-manager get secret chiikawa-ca-key-pair \
+    -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d 2>/dev/null \
+    | openssl x509 -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)
+  [ -n "$FP2" ] && [ "$FP1" == "$FP2" ] || { R="notthisca"; sleep 5; continue; }
 
-  RACCEPT=$(kubectl -n chiikawa get httproute hachiware-route \
-    -o jsonpath='{.status.parents[*].conditions[?(@.type=="Accepted")].status}' 2>/dev/null)
-  RMSG=$(kubectl -n chiikawa get httproute hachiware-route \
-    -o jsonpath='{.status.parents[*].conditions[?(@.type=="Accepted")].message}' 2>/dev/null)
-  echo "$RACCEPT" | grep -q "True" || { R="routenotaccepted"; sleep 5; continue; }
+  # The positive: one request, verified against that file, end to end.
+  BODY=$(curl -sS --cacert /root/answers/ca.crt --resolve "$HOST:443:$GWIP" \
+    "https://$HOST/hostname" 2>/dev/null)
+  WITHRC=$?
+  [ "$WITHRC" == "0" ] || { R="stillfails"; sleep 5; continue; }
+  echo "$BODY" | grep -q "hachiware" || { R="wrongbackend"; sleep 5; continue; }
 
-  BACKEND=$(kubectl -n chiikawa get httproute hachiware-route \
-    -o jsonpath='{.spec.rules[*].backendRefs[*].name}' 2>/dev/null)
-  echo "$BACKEND" | grep -q "hachiware" || { R="wrongbackend"; sleep 5; continue; }
-
-  GWIP=$(gw_ip)
-  [ -n "$GWIP" ] || { R="nodataplane"; sleep 5; continue; }
-
-  # The only claim that cannot be faked by a well-formed object graph: what
-  # comes back on the wire when something actually connects.
-  SERVED=$(echo | timeout 5 openssl s_client -connect "$GWIP:443" \
-    -servername hachiware.chiikawa.lab 2>/dev/null \
-    | openssl x509 -noout -issuer -ext subjectAltName 2>/dev/null)
-  echo "$SERVED" | grep -q "chiikawa-root-ca" || { R="nohandshake"; sleep 5; continue; }
-  echo "$SERVED" | grep -q "DNS:hachiware.chiikawa.lab" || { R="wrongsan"; sleep 5; continue; }
+  # The negative: the same request with nothing but the system store still has
+  # to fail, or the trust being demonstrated came from somewhere else.
+  curl -sS --resolve "$HOST:443:$GWIP" "https://$HOST/hostname" >/dev/null 2>&1
+  BARERC=$?
+  [ "$BARERC" != "0" ] || { R="alreadytrusted"; sleep 5; continue; }
 
   pass
 done
 
 case "$R" in
   nogateway) fail \
-    "There is no Gateway 'chiikawa-gateway' in namespace chiikawa." \
+    "There is no Gateway data plane to talk to -- finish step 3 first." \
     "" \
-    "  kubectl get gatewayclass" \
-    "  kubectl -n chiikawa get gateway" \
+    "  kubectl -n chiikawa get gateway,svc" ;;
+  nofile) fail \
+    "/root/answers/ca.crt does not exist, or is empty." \
     "" \
-    "  https://gateway-api.sigs.k8s.io/reference/api-types/gateway/" ;;
-  wrongclass) fail \
-    "'chiikawa-gateway' asks for gatewayClassName '${GWCLASS}'." \
+    "Write the certificate that makes the client trust this listener into that" \
+    "path, then:" \
+    "  visit /root/answers/ca.crt" ;;
+  notacert) fail \
+    "/root/answers/ca.crt is not a PEM certificate openssl can read." \
     "" \
-    "The only class with a controller behind it here is 'nginx'. A Gateway on a" \
-    "class nobody implements stays in Unknown forever and nothing tells you:" \
-    "  kubectl get gatewayclass nginx -o jsonpath='{.spec.controllerName}'" ;;
-  nohttps) fail \
-    "'chiikawa-gateway' has no HTTPS listener on port 443 (protocol=${PROTO:-<none>})." \
+    "  head -1 /root/answers/ca.crt" \
     "" \
-    "  kubectl -n chiikawa get gateway chiikawa-gateway -o jsonpath='{.spec.listeners}'" \
+    "If you piped a Secret value into it, remember it is base64 in the object:" \
+    "  kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data.ca\\.crt}' | base64 -d > /root/answers/ca.crt" ;;
+  notca) fail \
+    "The certificate in /root/answers/ca.crt is not a CA certificate." \
     "" \
-    "A listener of protocol HTTP on 443 is legal and will not terminate" \
-    "anything -- the port number carries no meaning by itself." ;;
-  wrongmode) fail \
-    "The listener's tls.mode is '${TLSMODE}', not Terminate." \
+    "  subject: ${SUBJ}" \
+    "  basicConstraints: ${BC:-<none>}" \
     "" \
-    "Passthrough hands the encrypted bytes to the backend untouched, which means" \
-    "the Gateway never uses the Secret at all -- and on most controllers an" \
-    "HTTPRoute cannot attach to such a listener:" \
-    "  https://gateway-api.sigs.k8s.io/guides/user-guides/tls/" ;;
-  nocertref) fail \
-    "The 443 listener does not reference Secret 'hachiware-tls'." \
+    "This is almost certainly the leaf, tls.crt -- and 'visit' with it WORKS," \
+    "which is exactly why it is worth failing you for. OpenSSL will anchor on" \
+    "the exact certificate presented, so the request succeeds and the mistake is" \
+    "invisible until the first renewal replaces that leaf and every client you" \
+    "handed it to breaks at once." \
     "" \
-    "  certificateRefs now: ${CERTREF:-<none>}" \
+    "The file that gets distributed is the one with CA:TRUE:" \
+    "  kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data.ca\\.crt}' | base64 -d > /root/answers/ca.crt" ;;
+  wrongca) fail \
+    "The certificate is a CA, but not chiikawa-root-ca." \
     "" \
-    "  kubectl -n chiikawa get gateway chiikawa-gateway -o jsonpath='{.spec.listeners[*].tls}'" ;;
-  unresolved) fail \
-    "The listener's references did not resolve (ResolvedRefs is not True)." \
+    "  subject: ${SUBJ}" ;;
+  notthisca) fail \
+    "That CA certificate is not the one this cluster signs with." \
     "" \
-    "Per-listener conditions:" \
-    "  ${LCONDS:-<none reported yet>}" \
+    "  yours:    ${FP1:-<none>}" \
+    "  cluster:  ${FP2:-<could not read the CA Secret>}" \
     "" \
-    "The Secret has to exist in the Gateway's own namespace and be a TLS Secret." \
-    "A certificateRef pointing into another namespace needs a ReferenceGrant" \
-    "there, and fails exactly like this without one:" \
-    "  kubectl -n chiikawa describe gateway chiikawa-gateway" ;;
-  noroute) fail \
-    "There is no HTTPRoute 'hachiware-route' in namespace chiikawa." \
+    "Two CAs with the same common name are two different authorities. If you" \
+    "regenerated the keypair at some point, the Secret and your local files have" \
+    "drifted apart -- take the certificate from the cluster:" \
+    "  kubectl -n cert-manager get secret chiikawa-ca-key-pair -o jsonpath='{.data.tls\\.crt}' | base64 -d > /root/answers/ca.crt" ;;
+  stillfails) fail \
+    "The request verified against /root/answers/ca.crt still fails (curl exit ${WITHRC})." \
     "" \
-    "The listener can complete a handshake with no route attached, and then" \
-    "return 404 to every request. Both objects are needed:" \
-    "  https://gateway-api.sigs.k8s.io/reference/api-types/httproute/" ;;
-  wrongparent) fail \
-    "'hachiware-route' attaches to '${RPARENT}', not to 'chiikawa-gateway'." \
+    "  visit /root/answers/ca.crt" \
     "" \
-    "  kubectl -n chiikawa get httproute hachiware-route -o jsonpath='{.spec.parentRefs}'" ;;
-  routenotaccepted) fail \
-    "'hachiware-route' was not accepted by the Gateway (Accepted=${RACCEPT:-<none>})." \
-    "" \
-    "What the parent says:" \
-    "  ${RMSG:-<nothing yet>}" \
-    "" \
-    "A hostname on the route that does not intersect the listener's hostname is" \
-    "the usual cause, and it is reported here rather than at apply time:" \
-    "  kubectl -n chiikawa describe httproute hachiware-route" ;;
+    "Exit 60 with a correct CA file usually means the listener is serving a leaf" \
+    "this CA did not sign. Exit 51 means the name does not match its SANs. Both" \
+    "are visible in the handshake:" \
+    "  servedcert" ;;
   wrongbackend) fail \
-    "'hachiware-route' does not send traffic to the 'hachiware' Service." \
+    "The request succeeded but the response did not come from hachiware." \
     "" \
-    "  backendRefs now: ${BACKEND:-<none>}" ;;
-  nodataplane) fail \
-    "No nginx data plane Service exists for this Gateway yet." \
+    "  body: ${BODY:-<empty>}" \
     "" \
-    "NGINX Gateway Fabric creates a Deployment and a Service per Gateway, in the" \
-    "Gateway's namespace, named after it:" \
-    "  kubectl -n chiikawa get deploy,svc,pods" \
-    "  kubectl -n nginx-gateway logs deploy/ngf-nginx-gateway-fabric --tail=30" ;;
-  nohandshake) fail \
-    "Nothing served a certificate from your CA on port 443." \
+    "A 404 here is the listener terminating TLS with no route matching the" \
+    "hostname -- TLS worked, routing did not:" \
+    "  kubectl -n chiikawa describe httproute hachiware-route" ;;
+  alreadytrusted) fail \
+    "The request succeeds even with no CA file, which it must not." \
     "" \
-    "  gateway address: ${GWIP:-<none>}" \
-    "  handshake returned: ${SERVED:-<no certificate at all>}" \
-    "" \
-    "Try it by hand and read the whole thing:" \
-    "  servedcert" \
-    "  kubectl -n chiikawa get pods" ;;
-  wrongsan) fail \
-    "The listener is serving a certificate without a SAN for hachiware.chiikawa.lab." \
-    "" \
-    "  ${SERVED}" \
-    "" \
-    "The listener is using some other Secret than the one step 2 produced." ;;
+    "Something has already been added to this machine's system trust store, or" \
+    "the client is not verifying at all. This step is the difference between the" \
+    "two requests, so it needs the plain one to fail:" \
+    "  visit" \
+    "  ls /usr/local/share/ca-certificates/" ;;
   *) fail "Unexpected state -- rerun the check." ;;
 esac

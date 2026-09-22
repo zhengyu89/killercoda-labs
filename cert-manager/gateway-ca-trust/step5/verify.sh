@@ -5,7 +5,7 @@
 # The loop records the condition it is still waiting on in R, and if it runs
 # out of attempts that is what the learner is told.
 LOG=/root/.check
-STEP="Step 5 · Trust that travels"
+STEP="Step 5 · Trust that scales: trust-manager"
 : > "$LOG"
 fail() { { echo "x $STEP"; echo; printf '%s\n' "$@"; } | tee "$LOG"; exit 1; }
 pass() { echo "OK $STEP -- passed." | tee "$LOG"; exit 0; }
@@ -22,125 +22,144 @@ gw_ip() {
 }
 
 HOST=hachiware.chiikawa.lab
+CA_FP=$(kubectl -n cert-manager get secret chiikawa-ca-key-pair \
+  -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d 2>/dev/null \
+  | openssl x509 -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)
 
-for _ in $(seq 1 24); do
+for _ in $(seq 1 30); do
+  SRC=$(kubectl get bundle chiikawa-ca-bundle \
+    -o jsonpath='{.spec.sources[0].secret.name}{" "}{.spec.sources[0].secret.key}' 2>/dev/null)
+  [ -n "$SRC" ] || { R="nobundle"; sleep 5; continue; }
+  [ "$SRC" == "chiikawa-ca-key-pair tls.crt" ] || { R="wrongsource"; sleep 5; continue; }
+
+  TARGETKEY=$(kubectl get bundle chiikawa-ca-bundle \
+    -o jsonpath='{.spec.target.configMap.key}' 2>/dev/null)
+  [ "$TARGETKEY" == "ca.crt" ] || { R="wrongtargetkey"; sleep 5; continue; }
+
+  SELECTOR=$(kubectl get bundle chiikawa-ca-bundle \
+    -o jsonpath='{.spec.target.namespaceSelector.matchLabels.chiikawa\.lab/trust-bundle}' 2>/dev/null)
+  [ "$SELECTOR" == "true" ] || { R="noselector"; sleep 5; continue; }
+
+  SYNCED=$(kubectl get bundle chiikawa-ca-bundle \
+    -o jsonpath='{.status.conditions[?(@.type=="Synced")].status}' 2>/dev/null)
+  SYNCMSG=$(kubectl get bundle chiikawa-ca-bundle \
+    -o jsonpath='{.status.conditions[?(@.type=="Synced")].message}' 2>/dev/null)
+  [ "$SYNCED" == "True" ] || { R="notsynced"; sleep 5; continue; }
+
+  # A Bundle with no namespaceSelector targets every namespace. Checking a
+  # control namespace that was never meant to be labeled is what catches
+  # that mistake -- the earlier checks would all still pass without it.
+  CONTROL=$(kubectl -n chiikawa get configmap chiikawa-ca-bundle \
+    -o jsonpath='{.data.ca\.crt}' 2>/dev/null)
+  [ -z "$CONTROL" ] || { R="toobroad"; sleep 5; continue; }
+
+  ALLGOOD=1
+  unset UNLABELED MISSINGNS WRONGNS
+  for NS in usagi kitchen; do
+    LBL=$(kubectl get namespace "$NS" \
+      -o jsonpath='{.metadata.labels.chiikawa\.lab/trust-bundle}' 2>/dev/null)
+    [ "$LBL" == "true" ] || { ALLGOOD=0; UNLABELED="$NS"; break; }
+
+    CMDATA=$(kubectl -n "$NS" get configmap chiikawa-ca-bundle \
+      -o jsonpath='{.data.ca\.crt}' 2>/dev/null)
+    if [ -z "$CMDATA" ]; then ALLGOOD=0; MISSINGNS="$NS"; break; fi
+
+    FP=$(echo "$CMDATA" | openssl x509 -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)
+    if [ -z "$CA_FP" ] || [ "$FP" != "$CA_FP" ]; then ALLGOOD=0; WRONGNS="$NS"; break; fi
+  done
+  [ "$ALLGOOD" == "1" ] || {
+    if [ -n "$UNLABELED" ]; then R="unlabeled"; else
+    if [ -n "$MISSINGNS" ]; then R="missingcm"; else R="wrongcm"; fi; fi
+    sleep 5; continue
+  }
+
+  # Proven live, from Usagi's own Pod, against the file trust-manager wrote --
+  # not against the copy the learner deleted at the start of this step.
   GWIP=$(gw_ip)
   [ -n "$GWIP" ] || { R="nogateway"; sleep 5; continue; }
 
-  BUNDLE=$(kubectl -n usagi get configmap chiikawa-ca-bundle \
-    -o jsonpath='{.data.ca\.crt}' 2>/dev/null)
-  if [ -z "$BUNDLE" ]; then
-    KEYS=$(kubectl -n usagi get configmap chiikawa-ca-bundle \
-      -o jsonpath='{.data}' 2>/dev/null)
-    R="nobundle"; sleep 5; continue
-  fi
-
-  # A trust bundle is copied everywhere and readable by anyone who can read a
-  # ConfigMap. A private key in one is the whole CA, handed out.
-  echo "$BUNDLE" | grep -q "PRIVATE KEY" && { R="haskey"; sleep 5; continue; }
-
-  echo "$BUNDLE" | openssl x509 -noout -subject >/dev/null 2>&1 \
-    || { R="notacert"; sleep 5; continue; }
-  BC=$(echo "$BUNDLE" | openssl x509 -noout -ext basicConstraints 2>/dev/null)
-  BSUBJ=$(echo "$BUNDLE" | openssl x509 -noout -subject 2>/dev/null)
-  echo "$BC" | grep -q "CA:TRUE" || { R="notca"; sleep 5; continue; }
-
-  FP1=$(echo "$BUNDLE" | openssl x509 -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)
-  FP2=$(kubectl -n cert-manager get secret chiikawa-ca-key-pair \
-    -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d 2>/dev/null \
-    | openssl x509 -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)
-  [ -n "$FP2" ] && [ "$FP1" == "$FP2" ] || { R="notthisca"; sleep 5; continue; }
-
-  READY=$(kubectl -n usagi get deploy usagi \
-    -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+  READY=$(kubectl -n usagi get deploy usagi -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
   [ "${READY:-0}" -ge 1 ] 2>/dev/null || { R="noclient"; sleep 5; continue; }
 
-  # Trust proven from inside the cluster, by the Pod, against the file it
-  # mounted -- not by the node and not by the learner's own helper.
   BODY=$(kubectl -n usagi exec deploy/usagi -- curl -sS --cacert /etc/trust/ca.crt \
     --resolve "$HOST:443:$GWIP" "https://$HOST/hostname" 2>/dev/null)
   WITHRC=$?
   [ "$WITHRC" == "0" ] || { R="stillfails"; sleep 5; continue; }
   echo "$BODY" | grep -q "hachiware" || { R="wrongbackend"; sleep 5; continue; }
 
-  kubectl -n usagi exec deploy/usagi -- curl -sS \
-    --resolve "$HOST:443:$GWIP" "https://$HOST/hostname" >/dev/null 2>&1
-  BARERC=$?
-  [ "$BARERC" != "0" ] || { R="alreadytrusted"; sleep 5; continue; }
-
   pass
 done
 
 case "$R" in
+  nobundle) fail \
+    "There is no Bundle 'chiikawa-ca-bundle' with a Secret source." \
+    "" \
+    "  kubectl get bundle" \
+    "" \
+    "  https://cert-manager.io/docs/trust/trust-manager/" ;;
+  wrongsource) fail \
+    "The Bundle's source is '${SRC:-<none>}', not 'chiikawa-ca-key-pair tls.crt'." \
+    "" \
+    "The same Secret cert-manager already reads for signing has the CA" \
+    "certificate under tls.crt -- no new Secret is needed:" \
+    "  kubectl get bundle chiikawa-ca-bundle -o jsonpath='{.spec.sources}'" ;;
+  wrongtargetkey) fail \
+    "The Bundle's target ConfigMap key is '${TARGETKEY:-<none>}', not 'ca.crt'." \
+    "" \
+    "Usagi's Pod mounts the ConfigMap and expects a file named ca.crt at" \
+    "/etc/trust -- the target key is that filename:" \
+    "  kubectl get bundle chiikawa-ca-bundle -o jsonpath='{.spec.target}'" ;;
+  noselector) fail \
+    "The Bundle has no namespaceSelector matching chiikawa.lab/trust-bundle=true." \
+    "" \
+    "With no namespaceSelector at all, a Bundle targets *every* namespace --" \
+    "that is not 'select nothing', it is 'select everything':" \
+    "  kubectl get bundle chiikawa-ca-bundle -o jsonpath='{.spec.target.namespaceSelector}'" ;;
+  notsynced) fail \
+    "Bundle 'chiikawa-ca-bundle' is not Synced (Synced=${SYNCED:-<none>})." \
+    "" \
+    "What it says:" \
+    "  ${SYNCMSG:-<no message yet>}" ;;
+  toobroad) fail \
+    "Namespace 'chiikawa' has the Bundle's ConfigMap, and it was never labeled." \
+    "" \
+    "That only happens with no namespaceSelector, or one that matches too much." \
+    "Fix spec.target.namespaceSelector.matchLabels and re-apply the Bundle:" \
+    "  kubectl get bundle chiikawa-ca-bundle -o jsonpath='{.spec.target.namespaceSelector}'" ;;
+  unlabeled) fail \
+    "Namespace '${UNLABELED}' is missing the label chiikawa.lab/trust-bundle=true." \
+    "" \
+    "  kubectl label namespace ${UNLABELED} chiikawa.lab/trust-bundle=true" ;;
+  missingcm) fail \
+    "Namespace '${MISSINGNS}' is labeled, but has no ConfigMap 'chiikawa-ca-bundle' yet." \
+    "" \
+    "  kubectl get bundle chiikawa-ca-bundle -o jsonpath='{.status.conditions}'" \
+    "  kubectl -n ${MISSINGNS} get configmap" ;;
+  wrongcm) fail \
+    "Namespace '${WRONGNS}' has the ConfigMap, but its ca.crt does not match" \
+    "this cluster's CA." \
+    "" \
+    "  kubectl -n ${WRONGNS} get configmap chiikawa-ca-bundle -o jsonpath='{.data.ca\\.crt}' | openssl x509 -noout -subject -issuer" ;;
   nogateway) fail \
-    "There is no Gateway data plane to talk to -- finish step 3 first." \
+    "There is no Gateway data plane to talk to -- finish step 2 first." \
     "" \
     "  kubectl -n chiikawa get gateway,svc" ;;
-  nobundle) fail \
-    "No ConfigMap 'chiikawa-ca-bundle' in namespace usagi with a 'ca.crt' key." \
-    "" \
-    "  keys present: ${KEYS:-<no such ConfigMap>}" \
-    "" \
-    "The key name is the filename inside the container, and /root/usagi.yaml" \
-    "mounts the whole ConfigMap at /etc/trust:" \
-    "  kubectl -n usagi create configmap chiikawa-ca-bundle --from-file=ca.crt=/root/answers/ca.crt" ;;
-  haskey) fail \
-    "The bundle contains a PRIVATE KEY. Delete it now." \
-    "" \
-    "  kubectl -n usagi delete configmap chiikawa-ca-bundle" \
-    "" \
-    "A trust bundle is public by construction: copied into every namespace," \
-    "mounted by every workload, readable by anyone who can read a ConfigMap." \
-    "The CA's private key in one is not a leak of a certificate -- it is the" \
-    "authority itself, and anything holding it can mint a certificate for any" \
-    "name you own. Certificates only:" \
-    "  kubectl -n usagi create configmap chiikawa-ca-bundle --from-file=ca.crt=/root/answers/ca.crt" ;;
-  notacert) fail \
-    "The 'ca.crt' key in the bundle is not a PEM certificate." \
-    "" \
-    "  kubectl -n usagi get configmap chiikawa-ca-bundle -o jsonpath='{.data.ca\\.crt}' | head -1" \
-    "" \
-    "If it looks like base64 rather than -----BEGIN CERTIFICATE-----, it was" \
-    "copied straight out of a Secret without decoding it." ;;
-  notca) fail \
-    "The certificate in the bundle is not a CA certificate." \
-    "" \
-    "  subject: ${BSUBJ:-<none>}" \
-    "  basicConstraints: ${BC:-<none>}" \
-    "" \
-    "Same trap as step 4, one layer further out: distributing the leaf makes" \
-    "today's request work and guarantees an outage at the first renewal." ;;
-  notthisca) fail \
-    "The bundle does not hold the CA this cluster signs with." \
-    "" \
-    "  bundle:   ${FP1:-<none>}" \
-    "  cluster:  ${FP2:-<could not read the CA Secret>}" ;;
   noclient) fail \
     "The usagi Deployment has no ready replica." \
     "" \
     "  kubectl apply -f /root/usagi.yaml" \
-    "  kubectl -n usagi describe pod -l app=usagi | tail -20" \
-    "" \
-    "A Pod whose volume names a ConfigMap that does not exist does not crash --" \
-    "it waits in ContainerCreating indefinitely, with the reason on the Pod's" \
-    "events and nowhere else." ;;
+    "  kubectl -n usagi describe pod -l app=usagi | tail -20" ;;
   stillfails) fail \
     "From inside the Pod, the request against /etc/trust/ca.crt still fails (curl exit ${WITHRC})." \
     "" \
     "  insidecurl /etc/trust/ca.crt" \
     "" \
-    "Check what actually landed in the container, and under what name:" \
-    "  kubectl -n usagi exec deploy/usagi -- ls -l /etc/trust" ;;
+    "Give the volume a moment to catch up with the new ConfigMap -- kubelet" \
+    "syncs mounted ConfigMaps on its own schedule, not instantly:" \
+    "  kubectl -n usagi exec deploy/usagi -- cat /etc/trust/ca.crt" ;;
   wrongbackend) fail \
     "The in-cluster request succeeded but the reply did not come from hachiware." \
     "" \
     "  body: ${BODY:-<empty>}" ;;
-  alreadytrusted) fail \
-    "The in-cluster request succeeds with no CA file at all, which it must not." \
-    "" \
-    "This step is the difference between the two requests. If the plain one" \
-    "passes, the image's trust store already contains your CA, or the Pod is" \
-    "reaching something other than the Gateway:" \
-    "  insidecurl" ;;
   *) fail "Unexpected state -- rerun the check." ;;
 esac

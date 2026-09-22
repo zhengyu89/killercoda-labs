@@ -5,7 +5,7 @@
 # The loop records the condition it is still waiting on in R, and if it runs
 # out of attempts that is what the learner is told.
 LOG=/root/.check
-STEP="Step 1 · A CA you made yourself"
+STEP="Step 1 · Create the Chiikawa Bakery CA"
 : > "$LOG"
 fail() { { echo "x $STEP"; echo; printf '%s\n' "$@"; } | tee "$LOG"; exit 1; }
 pass() { echo "OK $STEP -- passed." | tee "$LOG"; exit 0; }

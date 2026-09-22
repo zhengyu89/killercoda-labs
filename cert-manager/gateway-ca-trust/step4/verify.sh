@@ -5,7 +5,7 @@
 # The loop records the condition it is still waiting on in R, and if it runs
 # out of attempts that is what the learner is told.
 LOG=/root/.check
-STEP="Step 4 · The same request, twice"
+STEP="Step 4 · Usagi receives the CA by hand"
 : > "$LOG"
 fail() { { echo "x $STEP"; echo; printf '%s\n' "$@"; } | tee "$LOG"; exit 1; }
 pass() { echo "OK $STEP -- passed." | tee "$LOG"; exit 0; }
@@ -21,39 +21,50 @@ gw_ip() {
   echo "$ip"
 }
 
-GWIP=$(gw_ip)
 HOST=hachiware.chiikawa.lab
 
-for _ in $(seq 1 12); do
-  [ -n "$GWIP" ] || { R="nogateway"; sleep 5; GWIP=$(gw_ip); continue; }
+for _ in $(seq 1 24); do
+  GWIP=$(gw_ip)
+  [ -n "$GWIP" ] || { R="nogateway"; sleep 5; continue; }
 
-  [ -s /root/answers/ca.crt ] || { R="nofile"; sleep 5; continue; }
+  BUNDLE=$(kubectl -n usagi get configmap chiikawa-ca-bundle \
+    -o jsonpath='{.data.ca\.crt}' 2>/dev/null)
+  if [ -z "$BUNDLE" ]; then
+    KEYS=$(kubectl -n usagi get configmap chiikawa-ca-bundle \
+      -o jsonpath='{.data}' 2>/dev/null)
+    R="nobundle"; sleep 5; continue
+  fi
 
-  SUBJ=$(openssl x509 -in /root/answers/ca.crt -noout -subject 2>/dev/null)
-  [ -n "$SUBJ" ] || { R="notacert"; sleep 5; continue; }
+  # A trust bundle is copied everywhere and readable by anyone who can read a
+  # ConfigMap. A private key in one is the whole CA, handed out.
+  echo "$BUNDLE" | grep -q "PRIVATE KEY" && { R="haskey"; sleep 5; continue; }
 
-  BC=$(openssl x509 -in /root/answers/ca.crt -noout -ext basicConstraints 2>/dev/null)
+  echo "$BUNDLE" | openssl x509 -noout -subject >/dev/null 2>&1 \
+    || { R="notacert"; sleep 5; continue; }
+  BC=$(echo "$BUNDLE" | openssl x509 -noout -ext basicConstraints 2>/dev/null)
+  BSUBJ=$(echo "$BUNDLE" | openssl x509 -noout -subject 2>/dev/null)
   echo "$BC" | grep -q "CA:TRUE" || { R="notca"; sleep 5; continue; }
-  echo "$SUBJ" | grep -q "CN *= *chiikawa-root-ca" || { R="wrongca"; sleep 5; continue; }
 
-  # Same certificate as the one the cluster is actually signing with, rather
-  # than merely something with the right name in it.
-  FP1=$(openssl x509 -in /root/answers/ca.crt -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)
+  FP1=$(echo "$BUNDLE" | openssl x509 -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)
   FP2=$(kubectl -n cert-manager get secret chiikawa-ca-key-pair \
     -o jsonpath='{.data.tls\.crt}' 2>/dev/null | base64 -d 2>/dev/null \
     | openssl x509 -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)
   [ -n "$FP2" ] && [ "$FP1" == "$FP2" ] || { R="notthisca"; sleep 5; continue; }
 
-  # The positive: one request, verified against that file, end to end.
-  BODY=$(curl -sS --cacert /root/answers/ca.crt --resolve "$HOST:443:$GWIP" \
-    "https://$HOST/hostname" 2>/dev/null)
+  READY=$(kubectl -n usagi get deploy usagi \
+    -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+  [ "${READY:-0}" -ge 1 ] 2>/dev/null || { R="noclient"; sleep 5; continue; }
+
+  # Trust proven from inside the cluster, by the Pod, against the file it
+  # mounted -- not by the node and not by the learner's own helper.
+  BODY=$(kubectl -n usagi exec deploy/usagi -- curl -sS --cacert /etc/trust/ca.crt \
+    --resolve "$HOST:443:$GWIP" "https://$HOST/hostname" 2>/dev/null)
   WITHRC=$?
   [ "$WITHRC" == "0" ] || { R="stillfails"; sleep 5; continue; }
   echo "$BODY" | grep -q "hachiware" || { R="wrongbackend"; sleep 5; continue; }
 
-  # The negative: the same request with nothing but the system store still has
-  # to fail, or the trust being demonstrated came from somewhere else.
-  curl -sS --resolve "$HOST:443:$GWIP" "https://$HOST/hostname" >/dev/null 2>&1
+  kubectl -n usagi exec deploy/usagi -- curl -sS \
+    --resolve "$HOST:443:$GWIP" "https://$HOST/hostname" >/dev/null 2>&1
   BARERC=$?
   [ "$BARERC" != "0" ] || { R="alreadytrusted"; sleep 5; continue; }
 
@@ -62,74 +73,74 @@ done
 
 case "$R" in
   nogateway) fail \
-    "There is no Gateway data plane to talk to -- finish step 3 first." \
+    "There is no Gateway data plane to talk to -- finish step 2 first." \
     "" \
     "  kubectl -n chiikawa get gateway,svc" ;;
-  nofile) fail \
-    "/root/answers/ca.crt does not exist, or is empty." \
+  nobundle) fail \
+    "No ConfigMap 'chiikawa-ca-bundle' in namespace usagi with a 'ca.crt' key." \
     "" \
-    "Write the certificate that makes the client trust this listener into that" \
-    "path, then:" \
-    "  visit /root/answers/ca.crt" ;;
+    "  keys present: ${KEYS:-<no such ConfigMap>}" \
+    "" \
+    "The key name is the filename inside the container, and /root/usagi.yaml" \
+    "mounts the whole ConfigMap at /etc/trust:" \
+    "  kubectl -n usagi create configmap chiikawa-ca-bundle --from-file=ca.crt=/root/answers/ca.crt" ;;
+  haskey) fail \
+    "The bundle contains a PRIVATE KEY. Delete it now." \
+    "" \
+    "  kubectl -n usagi delete configmap chiikawa-ca-bundle" \
+    "" \
+    "A trust bundle is public by construction: copied into every namespace," \
+    "mounted by every workload, readable by anyone who can read a ConfigMap." \
+    "The CA's private key in one is not a leak of a certificate -- it is the" \
+    "authority itself, and anything holding it can mint a certificate for any" \
+    "name you own. Certificates only:" \
+    "  kubectl -n usagi create configmap chiikawa-ca-bundle --from-file=ca.crt=/root/answers/ca.crt" ;;
   notacert) fail \
-    "/root/answers/ca.crt is not a PEM certificate openssl can read." \
+    "The 'ca.crt' key in the bundle is not a PEM certificate." \
     "" \
-    "  head -1 /root/answers/ca.crt" \
+    "  kubectl -n usagi get configmap chiikawa-ca-bundle -o jsonpath='{.data.ca\\.crt}' | head -1" \
     "" \
-    "If you piped a Secret value into it, remember it is base64 in the object:" \
-    "  kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data.ca\\.crt}' | base64 -d > /root/answers/ca.crt" ;;
+    "If it looks like base64 rather than -----BEGIN CERTIFICATE-----, it was" \
+    "copied straight out of a Secret without decoding it." ;;
   notca) fail \
-    "The certificate in /root/answers/ca.crt is not a CA certificate." \
+    "The certificate in the bundle is not a CA certificate." \
     "" \
-    "  subject: ${SUBJ}" \
+    "  subject: ${BSUBJ:-<none>}" \
     "  basicConstraints: ${BC:-<none>}" \
     "" \
-    "This is almost certainly the leaf, tls.crt -- and 'visit' with it WORKS," \
-    "which is exactly why it is worth failing you for. OpenSSL will anchor on" \
-    "the exact certificate presented, so the request succeeds and the mistake is" \
-    "invisible until the first renewal replaces that leaf and every client you" \
-    "handed it to breaks at once." \
-    "" \
-    "The file that gets distributed is the one with CA:TRUE:" \
-    "  kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data.ca\\.crt}' | base64 -d > /root/answers/ca.crt" ;;
-  wrongca) fail \
-    "The certificate is a CA, but not chiikawa-root-ca." \
-    "" \
-    "  subject: ${SUBJ}" ;;
+    "Same trap as step 3, one layer further out: distributing the leaf makes" \
+    "today's request work and guarantees an outage at the first renewal." ;;
   notthisca) fail \
-    "That CA certificate is not the one this cluster signs with." \
+    "The bundle does not hold the CA this cluster signs with." \
     "" \
-    "  yours:    ${FP1:-<none>}" \
-    "  cluster:  ${FP2:-<could not read the CA Secret>}" \
+    "  bundle:   ${FP1:-<none>}" \
+    "  cluster:  ${FP2:-<could not read the CA Secret>}" ;;
+  noclient) fail \
+    "The usagi Deployment has no ready replica." \
     "" \
-    "Two CAs with the same common name are two different authorities. If you" \
-    "regenerated the keypair at some point, the Secret and your local files have" \
-    "drifted apart -- take the certificate from the cluster:" \
-    "  kubectl -n cert-manager get secret chiikawa-ca-key-pair -o jsonpath='{.data.tls\\.crt}' | base64 -d > /root/answers/ca.crt" ;;
+    "  kubectl apply -f /root/usagi.yaml" \
+    "  kubectl -n usagi describe pod -l app=usagi | tail -20" \
+    "" \
+    "A Pod whose volume names a ConfigMap that does not exist does not crash --" \
+    "it waits in ContainerCreating indefinitely, with the reason on the Pod's" \
+    "events and nowhere else." ;;
   stillfails) fail \
-    "The request verified against /root/answers/ca.crt still fails (curl exit ${WITHRC})." \
+    "From inside the Pod, the request against /etc/trust/ca.crt still fails (curl exit ${WITHRC})." \
     "" \
-    "  visit /root/answers/ca.crt" \
+    "  insidecurl /etc/trust/ca.crt" \
     "" \
-    "Exit 60 with a correct CA file usually means the listener is serving a leaf" \
-    "this CA did not sign. Exit 51 means the name does not match its SANs. Both" \
-    "are visible in the handshake:" \
-    "  servedcert" ;;
+    "Check what actually landed in the container, and under what name:" \
+    "  kubectl -n usagi exec deploy/usagi -- ls -l /etc/trust" ;;
   wrongbackend) fail \
-    "The request succeeded but the response did not come from hachiware." \
+    "The in-cluster request succeeded but the reply did not come from hachiware." \
     "" \
-    "  body: ${BODY:-<empty>}" \
-    "" \
-    "A 404 here is the listener terminating TLS with no route matching the" \
-    "hostname -- TLS worked, routing did not:" \
-    "  kubectl -n chiikawa describe httproute hachiware-route" ;;
+    "  body: ${BODY:-<empty>}" ;;
   alreadytrusted) fail \
-    "The request succeeds even with no CA file, which it must not." \
+    "The in-cluster request succeeds with no CA file at all, which it must not." \
     "" \
-    "Something has already been added to this machine's system trust store, or" \
-    "the client is not verifying at all. This step is the difference between the" \
-    "two requests, so it needs the plain one to fail:" \
-    "  visit" \
-    "  ls /usr/local/share/ca-certificates/" ;;
+    "This step is the difference between the two requests. If the plain one" \
+    "passes, the image's trust store already contains your CA, or the Pod is" \
+    "reaching something other than the Gateway:" \
+    "  insidecurl" ;;
   *) fail "Unexpected state -- rerun the check." ;;
 esac

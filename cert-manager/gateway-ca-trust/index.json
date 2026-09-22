@@ -1,6 +1,6 @@
 {
   "title": "cert-manager CA & TLS Trust: Chiikawa's Bakery HTTPS Lab",
-  "description": "Chiikawa's bakery goes HTTPS: a CA you generate yourself with openssl, a ClusterIssuer backed by it, an NGINX Gateway listener terminating TLS with the Secret cert-manager wrote -- and the same request failing and then succeeding with nothing changed on the server except what the client was willing to believe",
+  "description": "Chiikawa's bakery goes HTTPS: a CA you generate yourself with openssl, a ClusterIssuer backed by it, a certificate that lights up a waiting Gateway listener -- and the same request failing and then succeeding as trust moves from your laptop to a hand-made ConfigMap to a trust-manager Bundle that keeps every namespace in sync on its own",
   "details": {
     "intro": {
       "text": "intro.md",
@@ -9,27 +9,27 @@
     },
     "steps": [
       {
-        "title": "A CA you made yourself",
+        "title": "Create the Chiikawa Bakery CA",
         "text": "step1/text.md",
         "verify": "step1/verify.sh"
       },
       {
-        "title": "Ask it for a certificate",
+        "title": "The Gateway asks for its certificate",
         "text": "step2/text.md",
         "verify": "step2/verify.sh"
       },
       {
-        "title": "Put it on a listener",
+        "title": "Understand client trust",
         "text": "step3/text.md",
         "verify": "step3/verify.sh"
       },
       {
-        "title": "The same request, twice",
+        "title": "Usagi receives the CA by hand",
         "text": "step4/text.md",
         "verify": "step4/verify.sh"
       },
       {
-        "title": "Trust that travels",
+        "title": "Trust that scales: trust-manager",
         "text": "step5/text.md",
         "verify": "step5/verify.sh"
       }

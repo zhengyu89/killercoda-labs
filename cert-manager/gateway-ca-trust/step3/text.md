@@ -1,116 +1,66 @@
 
-🚪 **A Secret full of PEM is not a website.** Something has to terminate TLS with it.
+## 🔒 Understand Client Trust
 
-The controller is already here, and it owns one class:
+📚 **Reference:**
+- [cert-manager: CA issuers](https://cert-manager.io/docs/configuration/ca/)
+- [OpenSSL `x509` command](https://docs.openssl.org/master/man1/openssl-x509/)
 
-```plain
-kubectl get gatewayclass nginx -o custom-columns=NAME:.metadata.name,CONTROLLER:.spec.controllerName,ACCEPTED:.status.conditions[0].status
-```{{exec}}
-
-`gateway.nginx.org/nginx-gateway-controller` — NGINX Gateway Fabric. `GatewayClass` is the cluster-scoped half of the split: an administrator installs the controller and declares the class; you write `Gateway`s against it. Note that **no nginx is running for you yet**:
+Everything is correct, and it fails anyway. The certificate is valid, the Gateway serves it, the route is attached, the backend is up. Make a request:
 
 ```plain
-kubectl -n chiikawa get deploy,svc
+visit
 ```{{exec}}
 
-Now build the front door, in two objects:
-
-1. A **`Gateway`** named `chiikawa-gateway` in namespace `chiikawa`, class `nginx`, with **one HTTPS listener on port 443** for hostname `hachiware.chiikawa.lab`, terminating TLS with the `hachiware-tls` Secret from step 2.
-2. An **`HTTPRoute`** named `hachiware-route` attaching to that Gateway and sending `hachiware.chiikawa.lab` to the `hachiware` Service on port 80.
-
-References: [Gateway API: TLS configuration](https://gateway-api.sigs.k8s.io/guides/user-guides/tls/), [the `Gateway` resource](https://gateway-api.sigs.k8s.io/reference/api-types/gateway/), [the `HTTPRoute` resource](https://gateway-api.sigs.k8s.io/reference/api-types/httproute/), and [NGINX Gateway Fabric: securing traffic](https://docs.nginx.com/nginx-gateway-fabric/traffic-security/).
-
-You are done when the listener is serving your certificate — no request, just the handshake:
+That fails, and **nothing is wrong with it**. The server is serving exactly what step 2 built:
 
 ```plain
 servedcert
 ```{{exec}}
+
+`curl` exit code 60 is `SSL certificate problem: unable to get local issuer certificate`. It is not a server error and it has no HTTP status code, because the request was never sent — the client hung up during the handshake. Nothing has ever given this machine a reason to believe `chiikawa-root-ca`: you made that CA yourself, on this same box, and the system trust store has never heard of it.
+
+### 🎯 Your Task: find the file that fixes it
+
+You have the certificate in more than one place. Compare them:
+
+```plain
+openssl x509 -in /root/ca/ca.crt -noout -fingerprint -sha256
+```{{exec}}
+
+```plain
+kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data.ca\.crt}' | base64 -d | openssl x509 -noout -fingerprint -sha256
+```{{exec}}
+
+```plain
+kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -subject -enddate -ext basicConstraints
+```{{exec}}
+
+**Two of these three will make `curl` succeed. Only one is the right answer**, and the check knows the difference. Work out which, write it to `/root/answers/ca.crt`, and prove it:
+
+```plain
+visit /root/answers/ca.crt
+```{{exec}}
+
+A pass here is the response body coming back — `hachiware-...`, the backend Pod's own name, over HTTPS.
 
 > **If CHECK does not pass**, run `why`{{exec}} — it prints the exact condition that was not met, and usually the command that shows you why.
 
 <br>
 
-<details><summary>Tip</summary>
-
-The Gateway tells you what it thinks of each listener separately from what it thinks of itself:
+<details><summary>✅ Solution (try it yourself first!)</summary>
 
 ```plain
-kubectl -n chiikawa get gateway chiikawa-gateway -o jsonpath='{range .status.listeners[*]}{.name}{"\t"}{range .conditions[*]}{.type}={.status} {end}{"\n"}{end}'
+kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > /root/answers/ca.crt
 ```{{exec}}
 
-`ResolvedRefs=False` means it cannot use the Secret you named — wrong name, wrong namespace, or not a TLS Secret. `Programmed` is about the data plane being configured for it.
-
-And the route has its own opinion, recorded per parent it tried to attach to:
+(`cp /root/ca/ca.crt /root/answers/ca.crt` is the same file — the CA you generated, and the CA cert-manager published next to the leaf, are one certificate. Their fingerprints from the two commands above should match.)
 
 ```plain
-kubectl -n chiikawa describe httproute hachiware-route
+visit /root/answers/ca.crt
 ```{{exec}}
 
-NGINX Gateway Fabric creates the actual nginx Deployment and Service **when the Gateway is created**, in the Gateway's namespace:
+Nothing changed on the server between the two `visit` calls. Same nginx, same listener, same certificate on the wire, same connection. The only thing that moved was **what the client was willing to believe**, and it moved because you handed it one file. That is the whole of "HTTPS fails without the CA, and succeeds with it": a TLS failure of this kind is never repaired on the server, because the server was never the problem.
 
-```plain
-kubectl -n chiikawa get deploy,svc,pods
-```{{exec}}
-
-</details>
-
-<details><summary>Solution</summary>
-
-```plain
-kubectl apply -f - <<'YAML'
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: chiikawa-gateway
-  namespace: chiikawa
-spec:
-  gatewayClassName: nginx
-  listeners:
-  - name: https
-    protocol: HTTPS
-    port: 443
-    hostname: hachiware.chiikawa.lab
-    tls:
-      mode: Terminate
-      certificateRefs:
-      - kind: Secret
-        name: hachiware-tls
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: hachiware-route
-  namespace: chiikawa
-spec:
-  parentRefs:
-  - name: chiikawa-gateway
-  hostnames:
-  - hachiware.chiikawa.lab
-  rules:
-  - backendRefs:
-    - name: hachiware
-      port: 80
-YAML
-```{{exec}}
-
-```plain
-kubectl -n chiikawa rollout status deploy/chiikawa-gateway-nginx --timeout=120s
-```{{exec}}
-
-An nginx Deployment and a Service appeared that you did not write. That is the shape of Gateway API on this controller: the `Gateway` object *is* the request for a data plane, and NGINX Gateway Fabric creates one per Gateway, in the Gateway's own namespace.
-
-```plain
-kubectl -n chiikawa get gateway chiikawa-gateway
-```{{exec}}
-
-```plain
-servedcert
-```{{exec}}
-
-The listener is serving a certificate issued by `CN=chiikawa-root-ca`, with `CA:FALSE` and a SAN of `hachiware.chiikawa.lab`. Nothing copied a file to do this — the listener names a Secret, the Secret is written by cert-manager, and when cert-manager renews it the same listener starts serving the new one without the Gateway being edited.
-
-**`certificateRefs` resolves in the Gateway's namespace.** There is no namespace field to set here by accident, but there is a `namespace` field available on the ref — and pointing it at another namespace does *not* work by default. That is a `ReferenceGrant` in the target namespace, granted by whoever owns the Secret, and its absence shows up as `ResolvedRefs=False` rather than as an apply-time error.
-
-**`mode: Terminate` is what makes any of this the Gateway's business.** The alternative, `Passthrough`, hands the encrypted bytes to the backend untouched — the platform never holds the key, and in exchange it can no longer route on anything inside the request, because it cannot read it.
+**Why not `tls.crt`.** Handing the client the leaf also works — OpenSSL will anchor on the exact certificate presented, so `curl` returns 200 and the setup looks finished. It is a trap rather than an alternative: the leaf is `CA:FALSE` and expires in 90 days, and cert-manager will replace it at 60. A trust store built out of leaves has to be rebuilt on every renewal, of every service, separately — and it grants trust to exactly one certificate rather than to the authority that issues them. The CA is `CA:TRUE`, lives ten years, and covers every certificate it will ever sign, including ones that do not exist yet. That is what makes steps 4 and 5 possible at all.
 
 </details>

@@ -5,13 +5,23 @@
 # The loop records the condition it is still waiting on in R, and if it runs
 # out of attempts that is what the learner is told.
 LOG=/root/.check
-STEP="Step 2 · Ask it for a certificate"
+STEP="Step 2 · The Gateway asks for its certificate"
 : > "$LOG"
 fail() { { echo "x $STEP"; echo; printf '%s\n' "$@"; } | tee "$LOG"; exit 1; }
 pass() { echo "OK $STEP -- passed." | tee "$LOG"; exit 0; }
 R=""
 
-for _ in $(seq 1 18); do
+gw_ip() {
+  local ip
+  ip=$(kubectl -n chiikawa get svc \
+    -l gateway.networking.k8s.io/gateway-name=chiikawa-gateway \
+    -o jsonpath='{.items[0].spec.clusterIP}' 2>/dev/null)
+  [ -z "$ip" ] && ip=$(kubectl -n chiikawa get svc chiikawa-gateway-nginx \
+    -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+  echo "$ip"
+}
+
+for _ in $(seq 1 24); do
   SECNAME=$(kubectl -n chiikawa get certificate hachiware-cert \
     -o jsonpath='{.spec.secretName}' 2>/dev/null)
   [ -n "$SECNAME" ] || { R="nocert"; sleep 5; continue; }
@@ -50,6 +60,18 @@ for _ in $(seq 1 18); do
   kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data.ca\.crt}' 2>/dev/null \
     | grep -q . || { R="nocacrt"; sleep 5; continue; }
 
+  # The Certificate being Ready is not the same claim as the Gateway serving
+  # it -- the pre-built listener only starts working once it can resolve the
+  # Secret this step wrote. Check what actually comes back on the wire.
+  GWIP=$(gw_ip)
+  [ -n "$GWIP" ] || { R="nodataplane"; sleep 5; continue; }
+
+  SERVED=$(echo | timeout 5 openssl s_client -connect "$GWIP:443" \
+    -servername hachiware.chiikawa.lab 2>/dev/null \
+    | openssl x509 -noout -issuer -ext subjectAltName 2>/dev/null)
+  echo "$SERVED" | grep -q "chiikawa-root-ca" || { R="nohandshake"; sleep 5; continue; }
+  echo "$SERVED" | grep -q "DNS:hachiware.chiikawa.lab" || { R="wrongsan"; sleep 5; continue; }
+
   pass
 done
 
@@ -63,7 +85,8 @@ case "$R" in
   wrongsecret) fail \
     "'hachiware-cert' writes to Secret '${SECNAME}', not 'hachiware-tls'." \
     "" \
-    "Step 3's Gateway listener references that Secret by name." ;;
+    "The Gateway's listener references that exact Secret name by name:" \
+    "  kubectl -n chiikawa get gateway chiikawa-gateway -o jsonpath='{.spec.listeners[*].tls.certificateRefs}'" ;;
   wrongissuer) fail \
     "'hachiware-cert' names issuer '${REF:-<none>}', not 'chiikawa-ca-issuer'." \
     "" \
@@ -80,7 +103,7 @@ case "$R" in
     "  dnsNames now: ${DNS:-<none>}" \
     "" \
     "That is the name the Gateway listener will serve and the name the client" \
-    "will ask for in step 4. A certificate for any other name fails there, and" \
+    "will ask for in step 3. A certificate for any other name fails there, and" \
     "the failure looks nothing like this one." ;;
   certnotready) fail \
     "'hachiware-cert' is not Ready (Ready=${CREADY:-<none>})." \
@@ -116,8 +139,33 @@ case "$R" in
     "" \
     "  kubectl -n chiikawa get secret hachiware-tls -o jsonpath='{.data}' | tr ',' '\\n'" \
     "" \
-    "A ca issuer publishes the signing certificate alongside the leaf, and steps" \
-    "4 and 5 both need it. If it is absent, this Secret was not written by" \
+    "A ca issuer publishes the signing certificate alongside the leaf, and later" \
+    "steps both need it. If it is absent, this Secret was not written by" \
     "cert-manager from a ca issuer at all." ;;
+  nodataplane) fail \
+    "No nginx data plane Service exists for 'chiikawa-gateway' yet." \
+    "" \
+    "NGINX Gateway Fabric creates a Deployment and a Service per Gateway. This" \
+    "one is pre-built for you -- if it's missing, something is wrong with the" \
+    "lab environment itself:" \
+    "  kubectl -n chiikawa get deploy,svc,pods" \
+    "  kubectl -n nginx-gateway logs deploy/ngf-nginx-gateway-fabric --tail=30" ;;
+  nohandshake) fail \
+    "Nothing served a certificate from your CA on the Gateway's port 443 yet." \
+    "" \
+    "  handshake returned: ${SERVED:-<no certificate at all>}" \
+    "" \
+    "The Certificate above may say Ready=True while the listener is still" \
+    "catching up, or the Secret it wrote may not be the one the listener" \
+    "names. Try it by hand:" \
+    "  servedcert" \
+    "  kubectl -n chiikawa get gateway chiikawa-gateway -o jsonpath='{.status.listeners}'" ;;
+  wrongsan) fail \
+    "The Gateway is serving a certificate without a SAN for hachiware.chiikawa.lab." \
+    "" \
+    "  ${SERVED}" \
+    "" \
+    "The listener is serving some other certificate than the one this step" \
+    "produced." ;;
   *) fail "Unexpected state -- rerun the check." ;;
 esac

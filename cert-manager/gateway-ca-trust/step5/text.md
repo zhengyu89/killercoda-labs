@@ -1,80 +1,108 @@
 
-🐰 **Usagi's turn.** You trust the bakery. Nothing else in the cluster does.
+## ⚙️ Trust That Scales: trust-manager
 
-Your laptop's `--cacert` flag is not a distribution strategy — every client that talks to `hachiware.chiikawa.lab` needs the same certificate, and clients are Pods with their own filesystems and their own trust stores.
+📚 **Reference:**
+- [cert-manager: trust-manager](https://cert-manager.io/docs/trust/trust-manager/)
+- [trust-manager: Bundle API reference](https://cert-manager.io/docs/trust/trust-manager/bundle/)
 
-There's a client waiting in `/root/usagi.yaml`: a Pod in namespace `usagi` that mounts a ConfigMap called `chiikawa-ca-bundle` at `/etc/trust`. Read it first — it will tell you what it needs:
+The manual copy works. It does not scale. Think about what step 4 looks like as the bakery grows:
+
+| Namespaces needing the CA | Manual copies |
+|---|---|
+| 1 (`usagi`) | manageable — you just did it |
+| 20 | painful — 20 ConfigMaps, 20 places to forget |
+| 100 | terrible — and every CA rotation means doing it 100 times again |
+
+`trust-manager` is already installed in this cluster, with no `Bundle` yet — the same way cert-manager started this lab with no issuer. A `Bundle` names a **source** (where the CA certificate comes from) and a **target** (where it gets written), including a label selector for which namespaces qualify. It is a control loop: label a namespace, and it appears there on its own; unlabel it, and trust-manager removes it.
+
+### 🎯 Your Tasks
+
+#### Task 1: Hand your manual copy over to the controller
+
+Delete the ConfigMap you made by hand in step 4 — you're about to let a controller own this name instead:
 
 ```plain
-cat /root/usagi.yaml
+kubectl -n usagi delete configmap chiikawa-ca-bundle
 ```{{exec}}
 
-Your task:
+#### Task 2: Label the target namespaces
 
-1. Create the **ConfigMap `chiikawa-ca-bundle`** in namespace `usagi`, with the bakery's CA certificate under the key **`ca.crt`**
-2. Apply the client and get it Running
-3. Prove the difference from inside the cluster:
+`kitchen` is empty and you have never touched it — proof that this is happening on its own, not because of anything you did there by hand:
 
 ```plain
-insidecurl
+kubectl label namespace usagi chiikawa.lab/trust-bundle=true
 ```{{exec}}
+
+```plain
+kubectl label namespace kitchen chiikawa.lab/trust-bundle=true
+```{{exec}}
+
+#### Task 3: Create the Bundle
+
+- **Name**: `chiikawa-ca-bundle`
+- **Source**: Secret `chiikawa-ca-key-pair`, key `tls.crt` — the same Secret cert-manager already reads for signing; no new Secret needed
+- **Target**: ConfigMap key `ca.crt`, in every namespace matching `chiikawa.lab/trust-bundle=true`
+
+```plain
+kubectl apply -f - <<'EOF'
+apiVersion: trust.cert-manager.io/v1alpha1
+kind: Bundle
+metadata:
+  name: chiikawa-ca-bundle
+spec:
+  sources:
+  - secret:
+      name: chiikawa-ca-key-pair
+      key: tls.crt
+  target:
+    configMap:
+      key: ca.crt
+    namespaceSelector:
+      matchLabels:
+        chiikawa.lab/trust-bundle: "true"
+EOF
+```{{exec}}
+
+A `secret` source has no namespace field — it always reads from trust-manager's one configured trust namespace, which defaults to `cert-manager`. That is exactly where `chiikawa-ca-key-pair` already lives.
+
+### ✅ Validate it yourself
+
+```plain
+kubectl get bundle chiikawa-ca-bundle
+```{{exec}}
+
+```plain
+kubectl -n usagi get configmap chiikawa-ca-bundle -o jsonpath='{.data.ca\.crt}' | openssl x509 -noout -subject -issuer
+```{{exec}}
+
+```plain
+kubectl -n kitchen get configmap chiikawa-ca-bundle
+```{{exec}}
+
+`kitchen` getting the same ConfigMap, with no manual step of yours in that namespace at all, is the entire point. And the client from step 4 still works — nothing there was touched, its ConfigMap just has a new owner now:
 
 ```plain
 insidecurl /etc/trust/ca.crt
 ```{{exec}}
-
-⚠️ The check reads what you put in that ConfigMap, and it will fail you for putting **too much** in it.
 
 > **If CHECK does not pass**, run `why`{{exec}} — it prints the exact condition that was not met, and usually the command that shows you why.
 
 <br>
 
-<details><summary>Tip</summary>
+<details><summary>Tip: if a target namespace has no ConfigMap</summary>
 
-`kubectl create configmap --from-file=<key>=<path>` sets the key name explicitly — and the key name is the filename that appears inside the container.
-
-If the Pod never starts, look at *why* rather than at the logs:
+Check the Bundle's own status first — a source it cannot read fails the whole `Bundle`, not just one target:
 
 ```plain
-kubectl -n usagi describe pod -l app=usagi | tail -20
+kubectl get bundle chiikawa-ca-bundle -o jsonpath='{.status.conditions}' | tr ',' '\n'
 ```{{exec}}
 
-A volume from a ConfigMap that does not exist does not make the Pod crash — it makes it wait, forever, in `ContainerCreating`.
-
-</details>
-
-<details><summary>Solution</summary>
+If the Bundle is `Synced: True` but a namespace is still missing the ConfigMap, check its labels — `namespaceSelector` only matches what you actually applied:
 
 ```plain
-kubectl -n usagi create configmap chiikawa-ca-bundle --from-file=ca.crt=/root/answers/ca.crt
+kubectl get namespace usagi kitchen chiikawa --show-labels
 ```{{exec}}
 
-```plain
-kubectl apply -f /root/usagi.yaml
-```{{exec}}
-
-```plain
-kubectl -n usagi rollout status deploy/usagi --timeout=120s
-```{{exec}}
-
-```plain
-insidecurl
-```{{exec}}
-
-```plain
-insidecurl /etc/trust/ca.crt
-```{{exec}}
-
-Exit 60, then the Pod name of the bakery backend. 🎉 Same Pod, same request, same listener — one mounted file apart.
-
-**The key must never be in there.** A trust bundle is public by construction: it is copied into every namespace, mounted by every workload, and readable by anyone who can read a ConfigMap. `tls.crt` and `ca.crt` are certificates and belong in one. `tls.key` is the CA's private key, and anything holding it can mint a certificate for any name in your organisation. The check rejects a bundle containing a private key for that reason, and `trust-manager` refuses it outright with *only CERTIFICATE blocks are permitted*.
-
-**And this ConfigMap is a copy, not a control loop.** You made it by hand from a file on a node. Nothing keeps it in step with the CA: rotate the root, and this ConfigMap still holds the old one, in this namespace, plus every other copy anyone made anywhere. A new namespace gets nothing until someone remembers it exists.
-
-That is the job [trust-manager](https://cert-manager.io/docs/trust/trust-manager/) exists to do — a `Bundle` resource naming a source and a label selector, writing the CA into every matching namespace and keeping it there:
-
-```plain
-kubectl get crd bundles.trust.cert-manager.io 2>/dev/null || echo "trust-manager is not installed in this lab -- see cert-manager/issuers-and-trust"
-```{{exec}}
+A `Bundle` with **no** `namespaceSelector` targets every namespace, including ones you never meant to touch — `chiikawa`, `cert-manager`, even `kube-system`. Leaving it out is not "select nothing," it is "select everything."
 
 </details>
