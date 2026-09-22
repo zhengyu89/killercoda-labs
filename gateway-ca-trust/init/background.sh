@@ -49,16 +49,6 @@ helm install trust-manager oci://quay.io/jetstack/charts/trust-manager \
   --set defaultPackage.enabled=false \
   --wait --timeout 5m >/dev/null 2>&1
 
-if ! kubectl -n cert-manager get deploy cert-manager >/dev/null 2>&1; then
-  touch /tmp/.initbroken
-fi
-if ! kubectl -n cert-manager get deploy trust-manager >/dev/null 2>&1; then
-  touch /tmp/.initbroken
-fi
-if ! kubectl get gatewayclass nginx >/dev/null 2>&1; then
-  touch /tmp/.initbroken
-fi
-
 kubectl create namespace chiikawa >/dev/null 2>&1
 kubectl create namespace usagi >/dev/null 2>&1
 # Step 5's extra target namespace: nobody touches this one by hand, so a CA

@@ -121,9 +121,10 @@ Nothing in namespace `chiikawa` can read the CA's private key, and nothing neede
 
 <details><summary>Another way to do this: annotate the Gateway instead of writing a Certificate</summary>
 
-This lab has you write the `Certificate` object yourself, because seeing it directly is how you learn what cert-manager is actually doing. But cert-manager can also watch a `Gateway` directly and create the `Certificate` for you, one per TLS listener, using an annotation:
+This lab has you write the `Certificate` object yourself, because seeing it directly is how you learn what cert-manager is actually doing. But cert-manager can also watch a `Gateway` directly and create the `Certificate` for you, one per TLS listener, using an annotation. This is **not** what this step asks you to do — don't run it here, it would fight with the `Certificate` you just wrote for the same Secret. It's shown as a complete, pasteable manifest (not a `{{exec}}` block) so that if you do try it later, on a Gateway of your own, it applies cleanly instead of being typed line-by-line into the shell:
 
-```yaml
+```plain
+kubectl apply -f - <<'EOF'
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
@@ -141,8 +142,9 @@ spec:
       mode: Terminate
       certificateRefs:
       - name: hachiware-tls
+EOF
 ```
 
-cert-manager sees the annotation and the listener's `certificateRefs`, and creates a matching `Certificate` on its own — same result, no separate object to write. This is **not** what this step asks you to do; it's worth knowing about for real clusters, where you may prefer one Gateway annotation over a `Certificate` per listener. See [cert-manager: securing Gateway resources](https://cert-manager.io/docs/usage/gateway/).
+cert-manager sees the annotation and the listener's `certificateRefs`, and creates a matching `Certificate` on its own — same result, no separate object to write. It's worth knowing about for real clusters, where you may prefer one Gateway annotation over a `Certificate` per listener. See [cert-manager: securing Gateway resources](https://cert-manager.io/docs/usage/gateway/).
 
 </details>
