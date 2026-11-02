@@ -30,6 +30,35 @@ Along the way, the lab makes the important boundaries visible:
 
 The scenario uses cert-manager v1.20.3, Gateway API v1.6.1, and NGINX Gateway Fabric v2.7.2. It is designed for a one-node Kubernetes environment provided by Killercoda.
 
+### [🍜 CKA-Style Practice: Orbital Noodle Station Ops](orbital-noodle-ops/)
+
+The station's cluster has no administrator, and now you're it. Seven independent, everyday admin tasks on a two-node kubeadm cluster, each checked by what the cluster actually does:
+
+| # | Task | What the check observes |
+| --- | --- | --- |
+| 1 | RBAC for a bot that may scale one Deployment and nothing else | `kubectl auth can-i` for every required *and* forbidden action |
+| 2 | Pin a workload to a tainted node with a toleration plus required node affinity | the node each Pod actually runs on; blanket tolerations rejected |
+| 3 | Roll back a stuck rollout to a named revision and harden its strategy | image, availability, and the revision number *before* rollback |
+| 4 | Generate a Secret with Kustomize and consume it as env var and file | the hashed Secret name, and the env, file, and file mode inside the Pod |
+| 5 | A time-zoned CronJob with history and failure limits, run by hand | every field at its proper layer, plus a completed Job from the template |
+| 6 | Troubleshoot a Service with no endpoints and a probe killing healthy Pods | an in-cluster `curl`, unchanged Service UID, restart counts holding still |
+| 7 | PodDisruptionBudget plus cordon and drain | node empty of workload Pods, budget respected, replicas Ready elsewhere |
+
+It is designed for Killercoda's two-node kubeadm environment. It is an original practice scenario, not affiliated with or derived from any certification exam.
+
+### [🥟 CKA-Style Practice: Dumpling Annex Bring-up](annex-bringup/)
+
+A freshly built node, brought up from the bottom of the stack: the three plug-in points under every cluster, each built by hand.
+
+| # | Task | What the check observes |
+| --- | --- | --- |
+| 1 | Kernel modules and sysctls in drop-in files, with a stale file that wins at boot | values now, then again after `sysctl --system` replays the boot order |
+| 2 | cri-dockerd from its release tarball, hand-installed systemd units, socket activation | the running process's flags, and an image pulled over CRI landing in Docker |
+| 3 | Install the reference CNI plugins and hand-write a `bridge` network config | node `Ready`, Pod IPs from the node's own `podCIDR`, a probe Pod reaching the API |
+| 4 | Author a CRD with validation, a default, printer columns and a status subresource | the API server refusing bad objects, the default applied, status set via `/status` |
+
+The setup re-initialises Killercoda's one-node kubeadm cluster with no CNI, so step 3 starts from a `NotReady` node. Pinned versions: cri-dockerd v0.4.10, CNI plugins v1.9.1, Docker 29.9.2 (static, only if the image has no Docker).
+
 ## What makes these labs different
 
 - **Learn by diagnosis.** Steps lead with the objective. Tips and full solutions are there when you need them, not before.

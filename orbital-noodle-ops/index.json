@@ -1,0 +1,54 @@
+{
+  "title": "CKA-Style Practice: Orbital Noodle Station Ops",
+  "description": "An original, independent CKA-style practice lab on a two-node kubeadm cluster: least-privilege RBAC for a bot, taints and node affinity, a rollback to a named revision, Kustomize-generated Secrets, a time-zoned CronJob, a broken Service and liveness probe to diagnose, and a PodDisruptionBudget-guarded node drain",
+  "details": {
+    "intro": {
+      "text": "intro.md",
+      "background": "init/background.sh",
+      "foreground": "init/foreground.sh"
+    },
+    "steps": [
+      {
+        "title": "Ladle-9 gets a badge (RBAC)",
+        "text": "step1/text.md",
+        "verify": "step1/verify.sh"
+      },
+      {
+        "title": "The cold deck (taints & node affinity)",
+        "text": "step2/text.md",
+        "verify": "step2/verify.sh"
+      },
+      {
+        "title": "Bad broth (rollout history & rollback)",
+        "text": "step3/text.md",
+        "verify": "step3/verify.sh"
+      },
+      {
+        "title": "Pantry credentials (Kustomize secretGenerator)",
+        "text": "step4/text.md",
+        "verify": "step4/verify.sh"
+      },
+      {
+        "title": "Stock count (CronJob & Job)",
+        "text": "step5/text.md",
+        "verify": "step5/verify.sh"
+      },
+      {
+        "title": "Dead air (troubleshoot a Service and a probe)",
+        "text": "step6/text.md",
+        "verify": "step6/verify.sh"
+      },
+      {
+        "title": "Hull maintenance (PodDisruptionBudget & drain)",
+        "text": "step7/text.md",
+        "verify": "step7/verify.sh"
+      }
+    ],
+    "finish": {
+      "text": "finish.md"
+    }
+  },
+  "backend": {
+    "imageid": "kubernetes-kubeadm-2nodes"
+  }
+}
