@@ -1,5 +1,3 @@
-# CKA Practice Lab 2: Deployment, ReplicaSet and Pod
-
 This lab tests:
 
 1. Creating a Pod and a Deployment

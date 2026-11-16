@@ -1,5 +1,3 @@
-# CKA Practice Lab 3: Services
-
 This lab tests:
 
 1. Creating a ClusterIP Service (`port` and `targetPort`)
