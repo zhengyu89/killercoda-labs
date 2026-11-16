@@ -1,0 +1,50 @@
+{
+  "title": "CKA Practice Lab 2: Deployment, ReplicaSet and Pod",
+  "description": "Create a Pod, a Deployment and a ReplicaSet, then fix Pods stuck in CrashLoopBackOff, ImagePullBackOff and CreateContainerError",
+  "details": {
+    "intro": {
+      "text": "intro.md",
+      "background": "init/background.sh"
+    },
+    "steps": [
+      {
+        "title": "Task 1: Pod and Deployment",
+        "text": "step1/text.md",
+        "verify": "step1/verify.sh"
+      },
+      {
+        "title": "Task 2: ReplicaSet",
+        "text": "step2/text.md",
+        "verify": "step2/verify.sh"
+      },
+      {
+        "title": "Advanced Lab",
+        "text": "step3/text.md"
+      },
+      {
+        "title": "Task 3: CrashLoopBackOff",
+        "text": "step4/text.md",
+        "background": "step4/background.sh",
+        "verify": "step4/verify.sh"
+      },
+      {
+        "title": "Task 4: ImagePullBackOff",
+        "text": "step5/text.md",
+        "background": "step5/background.sh",
+        "verify": "step5/verify.sh"
+      },
+      {
+        "title": "Task 5: CreateContainerError",
+        "text": "step6/text.md",
+        "background": "step6/background.sh",
+        "verify": "step6/verify.sh"
+      }
+    ],
+    "finish": {
+      "text": "finish.md"
+    }
+  },
+  "backend": {
+    "imageid": "kubernetes-kubeadm-1node"
+  }
+}
