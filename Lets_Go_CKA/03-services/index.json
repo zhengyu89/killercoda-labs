@@ -1,0 +1,26 @@
+{
+  "title": "CKA Practice Lab 3: Services",
+  "description": "Create ClusterIP, NodePort and headless Services, find a nodePort, compare Pod and Service responses, hand-write an EndpointSlice and reach a Service in another namespace",
+  "details": {
+    "intro": {
+      "text": "intro.md",
+      "background": "init/background.sh"
+    },
+    "steps": [
+      { "title": "Task 1: ClusterIP Service", "text": "step1/text.md", "verify": "step1/verify.sh" },
+      { "title": "Task 2: Expose a Deployment", "text": "step2/text.md", "verify": "step2/verify.sh" },
+      { "title": "Task 3: Find the nodePort", "text": "step3/text.md", "verify": "step3/verify.sh" },
+      { "title": "Task 4: Pod vs Service", "text": "step4/text.md", "verify": "step4/verify.sh" },
+      { "title": "Task 5: Headless Service", "text": "step5/text.md", "verify": "step5/verify.sh" },
+      { "title": "Advanced Lab", "text": "step6/text.md" },
+      { "title": "Task 6: EndpointSlice", "text": "step7/text.md", "background": "step7/background.sh", "verify": "step7/verify.sh" },
+      { "title": "Task 7: Cross-namespace Service discovery", "text": "step8/text.md", "background": "step8/background.sh", "verify": "step8/verify.sh" }
+    ],
+    "finish": {
+      "text": "finish.md"
+    }
+  },
+  "backend": {
+    "imageid": "kubernetes-kubeadm-1node"
+  }
+}

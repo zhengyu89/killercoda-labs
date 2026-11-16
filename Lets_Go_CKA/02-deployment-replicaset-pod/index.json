@@ -1,6 +1,6 @@
 {
   "title": "CKA Practice Lab 2: Deployment, ReplicaSet and Pod",
-  "description": "Create a Pod, a Deployment and a ReplicaSet, then fix Pods stuck in CrashLoopBackOff, ImagePullBackOff and CreateContainerError",
+  "description": "Create a Pod, a Deployment and a ReplicaSet, then fix Pods stuck in CrashLoopBackOff, ImagePullBackOff and RunContainerError",
   "details": {
     "intro": {
       "text": "intro.md",
@@ -34,7 +34,7 @@
         "verify": "step5/verify.sh"
       },
       {
-        "title": "Task 5: CreateContainerError",
+        "title": "Task 5: RunContainerError",
         "text": "step6/text.md",
         "background": "step6/background.sh",
         "verify": "step6/verify.sh"

@@ -1,5 +1,10 @@
 {
   "items": [
-    { "path": "02-deployment-replicaset-pod" }
+    {
+      "path": "02-deployment-replicaset-pod"
+    },
+    {
+      "path": "03-services"
+    }
   ]
 }

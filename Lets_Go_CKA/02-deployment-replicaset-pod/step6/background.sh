@@ -1,24 +1,24 @@
 #!/bin/bash
-# distroless/static has no ENTRYPOINT and no CMD, and the spec sets no command,
-# so the runtime refuses to create the container: "no command specified".
-kubectl create namespace tools
+kubectl create namespace ops
 kubectl apply -f - <<'YAML'
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: toolbox
-  namespace: tools
+  name: reporter
+  namespace: ops
 spec:
   replicas: 1
+  minReadySeconds: 5
   selector:
     matchLabels:
-      app: toolbox
+      app: reporter
   template:
     metadata:
       labels:
-        app: toolbox
+        app: reporter
     spec:
       containers:
-      - name: toolbox
-        image: gcr.io/distroless/static-debian12
+      - name: reporter
+        image: busybox:1.36
+        command: ["/bash", "echo reporter started; sleep 3600"]
 YAML

@@ -1,13 +1,13 @@
-## Task 5: CreateContainerError
+## Task 5: RunContainerError
 
-A Deployment named `toolbox` in the `tools` namespace has a Pod stuck in `CreateContainerError`.
+A Deployment named `reporter` in the `ops` namespace has a Pod that cannot start. Its status switches between `RunContainerError` and `CrashLoopBackOff`.
 
-1. Find out why the container cannot be created.
+1. Find out why the container cannot start.
 2. Fix the Deployment so its Pod is Running and Ready.
-3. The container must use image `busybox:1.36` and run the command `sleep 3600`.
+3. Do not change the image. The container must still run the shell command `echo reporter started; sleep 3600`.
 
 ```plain
-kubectl -n tools get pods -l app=toolbox
+kubectl -n ops get pods -l app=reporter
 ```{{exec}}
 
 <details><summary>Solution</summary>
@@ -15,19 +15,25 @@ kubectl -n tools get pods -l app=toolbox
 The Pod events show the error:
 
 ```plain
-kubectl -n tools describe pod -l app=toolbox | grep -A10 Events
+kubectl -n ops describe pod -l app=reporter | grep -A10 Events
 ```{{exec}}
 
-`no command specified`: the image defines no default command, and the Pod spec does not set one either. Changing only the image is not enough. `busybox` defaults to `sh`, which exits at once and gives you `CrashLoopBackOff`. Set both the image and the command:
+`exec: "/bash": stat /bash: no such file or directory`. `/bash` does not exist, and `busybox` has no bash at all. Its shell is `/bin/sh`.
+
+Fixing only the path is not enough. Without `-c`, `sh` treats the next argument as a script file name and fails with `can't open 'echo reporter started; sleep 3600'`. The command needs to be `/bin/sh`, `-c`, then the shell command:
 
 ```plain
-kubectl -n tools patch deploy toolbox --type=json -p='[
-  {"op":"replace","path":"/spec/template/spec/containers/0/image","value":"busybox:1.36"},
-  {"op":"add","path":"/spec/template/spec/containers/0/command","value":["sleep","3600"]}
+kubectl -n ops patch deploy reporter --type=json -p='[
+  {"op":"replace","path":"/spec/template/spec/containers/0/command","value":["/bin/sh","-c","echo reporter started; sleep 3600"]}
 ]'
-kubectl -n tools rollout status deploy/toolbox
+kubectl -n ops rollout status deploy/reporter
+kubectl -n ops logs deploy/reporter
 ```{{exec}}
 
-Or run `kubectl -n tools edit deploy toolbox` and make the same two changes.
+Or run `kubectl -n ops edit deploy reporter` and change the command to:
+
+```yaml
+command: ["/bin/sh", "-c", "echo reporter started; sleep 3600"]
+```
 
 </details>
