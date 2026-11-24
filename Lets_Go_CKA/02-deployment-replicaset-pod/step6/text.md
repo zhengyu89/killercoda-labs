@@ -10,6 +10,12 @@ A Deployment named `reporter` in the `ops` namespace has a Pod that cannot start
 kubectl -n ops get pods -l app=reporter
 ```{{exec}}
 
+<details><summary>Hint</summary>
+
+The container never started, so it has no logs. Read the Events at the bottom of `kubectl describe pod`. The error names the file the kubelet could not find. Then check which shell the `busybox` image actually has.
+
+</details>
+
 <details><summary>Solution</summary>
 
 The Pod events show the error:

@@ -10,6 +10,12 @@ A Deployment named `frontend` in the `web` namespace has a Pod stuck in `ImagePu
 kubectl -n web get pods -l app=frontend
 ```{{exec}}
 
+<details><summary>Hint</summary>
+
+The image was never pulled, so the container never started and has no logs. Read the Events at the bottom of `kubectl describe pod` and look closely at the image name the kubelet is trying to pull.
+
+</details>
+
 <details><summary>Solution</summary>
 
 The Pod events show which image the kubelet is trying to pull:
